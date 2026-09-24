@@ -202,6 +202,29 @@ function ensureSchoolsTable($pdo) {
             PRIMARY KEY (`id`),
             UNIQUE KEY `uniq_smis` (`smis_code`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
+
+        // ตรวจสอบและเพิ่มคอลัมน์ student_count, project_count, total_budget อัตโนมัติหากตาราง schools ถูกสร้างไว้ก่อนหน้า
+        $columns = $pdo->query("SHOW COLUMNS FROM `schools`")->fetchAll(PDO::FETCH_COLUMN);
+        if ($columns && is_array($columns)) {
+            if (!in_array('student_count', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `student_count` INT UNSIGNED DEFAULT 0 AFTER `email`");
+            }
+            if (!in_array('project_count', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `project_count` INT UNSIGNED DEFAULT 0 AFTER `student_count`");
+            }
+            if (!in_array('total_budget', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `total_budget` DECIMAL(15,2) DEFAULT 0 AFTER `project_count`");
+            }
+            if (!in_array('admin_password_plain', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `admin_password_plain` VARCHAR(100) DEFAULT '123456' AFTER `admin_username`");
+            }
+            if (!in_array('admin_username', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `admin_username` VARCHAR(50) NOT NULL DEFAULT 'admin' AFTER `school_key`");
+            }
+            if (!in_array('school_key', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `school_key` VARCHAR(50) NOT NULL AFTER `is_active`");
+            }
+        }
     } catch (Exception $e) {
         error_log("Failed to ensure schools table: " . $e->getMessage());
     }

@@ -417,6 +417,21 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       UNIQUE KEY \`uniq_smis\` (\`smis_code\`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
 
+    // Ensure columns exist if table was created previously without them
+    try {
+      const [colRows]: any = await conn.query('SHOW COLUMNS FROM `schools`');
+      const existingCols = (colRows || []).map((c: any) => c.Field);
+      if (!existingCols.includes('student_count')) {
+        await conn.query('ALTER TABLE `schools` ADD COLUMN `student_count` INT UNSIGNED DEFAULT 0 AFTER `email`');
+      }
+      if (!existingCols.includes('project_count')) {
+        await conn.query('ALTER TABLE `schools` ADD COLUMN `project_count` INT UNSIGNED DEFAULT 0 AFTER `student_count`');
+      }
+      if (!existingCols.includes('total_budget')) {
+        await conn.query('ALTER TABLE `schools` ADD COLUMN `total_budget` DECIMAL(15,2) DEFAULT 0 AFTER `project_count`');
+      }
+    } catch (e) {}
+
     await conn.query(`CREATE TABLE IF NOT EXISTS \`fiscal_years\` (
       \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
       \`school_id\` INT UNSIGNED NOT NULL,
