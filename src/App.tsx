@@ -351,6 +351,22 @@ export default function App() {
     );
   }
 
+  // Dedicated Super Admin Portal (Completely separated from school view)
+  if (currentUser?.role === 'superadmin') {
+    return (
+      <div className="min-h-screen bg-slate-900 font-sans text-slate-100 flex flex-col">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+          <SuperAdminView
+            currentSchool={school}
+            onSelectSchool={(selected) => setSchool(selected)}
+            onLogout={handleLogout}
+            currentUser={currentUser}
+          />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-100/70 flex flex-col font-sans text-slate-900">
       {/* Top Header */}
@@ -363,7 +379,6 @@ export default function App() {
         onOpenGasModal={() => setIsGasModalOpen(true)}
         onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         onLogout={handleLogout}
-        onNavigateToSuperAdmin={() => setActiveTab('super_admin')}
         dbConnected={Boolean(dbStatus?.connected)}
         dbName={dbStatus?.database}
       />
@@ -385,57 +400,38 @@ export default function App() {
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 custom-scrollbar">
           <div className="max-w-7xl mx-auto">
-            {/* MySQL Connection Failure Banner */}
-            {dbStatus && !dbStatus.connected && activeTab !== 'super_admin' && (
-              <div className="mb-6 p-4 rounded-2xl border border-rose-300 bg-rose-50 text-rose-900 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-rose-600 text-white font-bold flex items-center justify-center shrink-0 shadow-sm">
-                    <Database className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-sm font-bold text-rose-900">
-                        ยังไม่สามารถเชื่อมต่อฐานข้อมูล MySQL ได้
-                      </h4>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-200 text-rose-900">
-                        MySQL Disconnected
-                      </span>
-                    </div>
-                    <p className="text-xs text-rose-700 mt-0.5">
-                      {dbStatus.error || 'โปรดตรวจสอบชื่อโฮสต์, ฐานข้อมูล, ผู้ใช้ และรหัสผ่าน หรือเปิดสิทธิ์ ALL PRIVILEGES ใน cPanel MySQL'}
-                    </p>
-                  </div>
+            {/* MySQL Connection Status Banner for School Users */}
+            {dbStatus && !dbStatus.connected && (
+              <div className="mb-6 p-4 rounded-2xl border border-amber-300 bg-amber-50 text-amber-900 shadow-sm flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-600 text-white font-bold flex items-center justify-center shrink-0 shadow-sm">
+                  <Database className="w-5 h-5" />
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('super_admin')}
-                  className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer"
-                >
-                  <Database className="w-4 h-4" />
-                  <span>ไปที่การตั้งค่า MySQL ใน Super Admin</span>
-                </button>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-bold text-amber-950">
+                      ระบบบันทึกข้อมูลด้วยระบบสำรอง (Local Storage)
+                    </h4>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-200 text-amber-900">
+                      พร้อมใช้งาน
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-800 mt-0.5">
+                    คุณครูสามารถบันทึกข้อมูลและใช้งานได้ตามปกติ (หากต้องการเชื่อมต่อฐานข้อมูล MySQL ส่วนกลาง โปรดติดต่อ Super Admin)
+                  </p>
+                </div>
               </div>
             )}
-            {school.isActive === false && activeTab !== 'super_admin' && (
-              <div className="mb-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-900 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center text-rose-600 font-bold shrink-0">
-                    !
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold">สถานศึกษาถูกระงับการใช้งานชั่วคราว (Inactive)</h4>
-                    <p className="text-xs text-rose-600">
-                      Super Admin ได้ระงับการใช้งานโรงเรียนนี้ เพื่อความปลอดภัยข้อมูลจึงถูกล็อกการบันทึก
-                    </p>
-                  </div>
+            {school.isActive === false && (
+              <div className="mb-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 flex items-center gap-3 text-rose-900 shadow-sm">
+                <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center text-rose-600 font-bold shrink-0">
+                  !
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('super_admin')}
-                  className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs transition-colors shrink-0"
-                >
-                  เปิดหน้า Super Admin เพื่อจัดการ
-                </button>
+                <div>
+                  <h4 className="text-sm font-bold">สถานศึกษาถูกระงับการใช้งานชั่วคราว (Inactive)</h4>
+                  <p className="text-xs text-rose-600">
+                    โปรดติดต่อผู้ดูแลระบบส่วนกลาง (Super Admin) เพื่อขอเปิดใช้งานสถานศึกษา
+                  </p>
+                </div>
               </div>
             )}
 
@@ -608,15 +604,6 @@ export default function App() {
                 users={users}
                 currentUser={currentUser}
                 onUpdateUsers={(updated) => setUsers(updated)}
-              />
-            )}
-
-            {activeTab === 'super_admin' && (
-              <SuperAdminView
-                currentSchool={school}
-                onSelectSchool={(selected) => {
-                  setSchool(selected);
-                }}
               />
             )}
           </div>

@@ -17,5 +17,42 @@
     "registeredAt": "2026-09-20T00:00:00.000Z",
     "approvedAt": "2026-09-20T00:00:00.000Z",
     "approvedBy": "Super Admin"
+  },
+  {
+    "id": 2,
+    "username": "1100123456789",
+    "citizenId": "1100123456789",
+    "fullName": "นายคุณครู รักเรียน",
+    "position": "ครูชำนาญการ",
+    "department": "ฝ่ายการสอนและวิชาการ",
+    "email": "rakrian@school.th",
+    "phone": "0811112233",
+    "role": "admin",
+    "schoolId": 1790262514221,
+    "schoolSmis": "10400199",
+    "password": "1-6",
+    "isPasswordChanged": false,
+    "status": "approved",
+    "registeredAt": "2026-09-24T15:08:40.538Z",
+    "isActive": true
+  },
+  {
+    "id": 3,
+    "username": "1100987654321",
+    "citizenId": "1100987654321",
+    "fullName": "นางสาวศิริพร ใจดี",
+    "position": "ครู",
+    "department": "ฝ่ายการสอนและวิชาการ",
+    "email": "siriporn@school.th",
+    "phone": "0899998888",
+    "role": "teacher",
+    "schoolId": 1790262514221,
+    "schoolSmis": "10400199",
+    "password": "1-6",
+    "isPasswordChanged": false,
+    "status": "approved",
+    "registeredAt": "2026-09-24T15:08:57.361Z",
+    "isActive": true,
+    "approvedAt": "2026-09-24T15:09:05.688Z"
   }
 ]

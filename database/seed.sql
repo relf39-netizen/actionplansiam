@@ -7,6 +7,11 @@
 
 SET FOREIGN_KEY_CHECKS = 0;
 
+-- ข้อมูลผู้ดูแลระบบส่วนกลาง (Super Admin)
+INSERT INTO `super_admins` (`id`, `username`, `password_hash`, `full_name`, `email`) VALUES
+(1, 'peyarm', '1-6', 'ผู้ดูแลระบบส่วนกลาง (Super Admin)', 'peyarm@obec.mail.go.th')
+ON DUPLICATE KEY UPDATE username = VALUES(username);
+
 -- ข้อมูลโรงเรียน
 INSERT INTO `schools` (`id`, `school_code`, `name`, `address`, `subdistrict`, `district`, `province`, `zipcode`, `affiliation`, `education_area`, `fiscal_year`, `director_name`, `phone`, `email`, `logo_url`) VALUES
 (1, '1000000001', 'โรงเรียนเด็กเรียนดี', '124 หมู่ที่ 3 ถนนมิตรภาพ', 'ในเมือง', 'เมือง', 'กรุงเทพมหานคร', '10100', 'สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.)', 'สำนักงานเขตพื้นที่การศึกษาประถมศึกษา', 2568, 'ดร.สมศักดิ์ พัฒนศึกษา', '02-123-4567', 'dekriandee@obec.mail.go.th', 'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=160&auto=format&fit=crop&q=80');

@@ -1,1 +1,41 @@
-[]
+[
+  {
+    "id": 1,
+    "schoolCode": "1000000100",
+    "smisCode": "10000001",
+    "name": "โรงเรียนของคุณ (กรุณากรอกข้อมูลโรงเรียน)",
+    "province": "กรุงเทพมหานคร",
+    "educationArea": "สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.)",
+    "directorName": "",
+    "phone": "",
+    "email": "",
+    "isActive": true,
+    "schoolKey": "SCH-10000001",
+    "adminUsername": "admin",
+    "adminPasswordPlain": "123456",
+    "studentCount": 0,
+    "projectCount": 0,
+    "totalBudget": 0,
+    "notes": "โรงเรียนเริ่มต้น"
+  },
+  {
+    "id": 1790262514221,
+    "schoolCode": "1040019900",
+    "smisCode": "10400199",
+    "isActive": true,
+    "schoolKey": "SCH-10400199",
+    "name": "โรงเรียนอนุบาลสามเสน",
+    "province": "",
+    "educationArea": "",
+    "directorName": "",
+    "phone": "",
+    "email": "",
+    "studentCount": 0,
+    "projectCount": 0,
+    "totalBudget": 0,
+    "notes": "เปิดสถานศึกษาใหม่โดย Super Admin",
+    "adminTeacherId": 2,
+    "adminTeacherName": "นายคุณครู รักเรียน",
+    "adminUsername": "1100123456789"
+  }
+]

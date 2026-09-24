@@ -17,9 +17,14 @@ CREATE TABLE `super_admins` (
   `full_name` VARCHAR(150) NOT NULL COMMENT 'ชื่อ-นามสกุล',
   `email` VARCHAR(100) DEFAULT NULL,
   `phone` VARCHAR(50) DEFAULT NULL,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางผู้ดูแลระบบส่วนกลาง Super Admin';
+
+INSERT INTO `super_admins` (`id`, `username`, `password_hash`, `full_name`, `email`)
+VALUES (1, 'peyarm', '1-6', 'ผู้ดูแลระบบส่วนกลาง (Super Admin)', 'peyarm@obec.mail.go.th')
+ON DUPLICATE KEY UPDATE username = VALUES(username);
 
 -- 1. ตารางข้อมูลโรงเรียน (schools) - รองรับ Multi-Tenant และรหัสสมัคร SMIS 8 หลัก
 DROP TABLE IF EXISTS `schools`;

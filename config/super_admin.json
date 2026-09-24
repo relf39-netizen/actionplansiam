@@ -2,8 +2,9 @@
   "username": "peyarm",
   "password": "1-6",
   "passPlain": "1-6",
-  "isPasswordChanged": false,
   "fullName": "ผู้ดูแลระบบส่วนกลาง (Super Admin)",
   "email": "peyarm@obec.mail.go.th",
-  "role": "superadmin"
+  "role": "superadmin",
+  "isPasswordChanged": true,
+  "updatedAt": "2026-09-24T15:09:41.799Z"
 }

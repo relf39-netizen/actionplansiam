@@ -86,8 +86,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'action_plan', label: '11. แผนปฏิบัติการประจำปี', icon: Target },
     { id: 'reports', label: '12. รายงาน', icon: FileText },
     { id: 'settings', label: '13. ตั้งค่าระบบ', icon: Settings },
-    { id: 'users', label: '14. ผู้ใช้งาน', icon: ShieldAlert },
-    { id: 'super_admin', label: '15. Super Admin (MySQL & โรงเรียน)', icon: Database, badge: '8 หลัก' },
+    { id: 'users', label: '14. ผู้ใช้งานและอนุมัติครู', icon: ShieldAlert },
   ];
 
   return (

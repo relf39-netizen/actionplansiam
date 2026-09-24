@@ -49,9 +49,38 @@ export const UsersView: React.FC<UsersViewProps> = ({
     password: '',
   });
 
-  // Separate approved users and pending users
-  const pendingUsers = users.filter((u) => u.status === 'pending');
-  const approvedUsers = users.filter((u) => u.status !== 'pending');
+  // Fetch latest users from backend on mount so newly registered teachers appear
+  useEffect(() => {
+    const fetchLatestUsers = async () => {
+      try {
+        const res = await fetch('/api/super-admin/users');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && Array.isArray(data.users)) {
+            onUpdateUsers(data.users);
+          }
+        }
+      } catch (e) {
+        console.warn('Could not fetch fresh users:', e);
+      }
+    };
+    fetchLatestUsers();
+  }, []);
+
+  // Filter users belonging to this school (or all if superadmin)
+  const schoolUsers =
+    currentUser.role === 'superadmin' || !currentUser.schoolId
+      ? users
+      : users.filter(
+          (u) =>
+            !u.schoolId ||
+            u.schoolId === currentUser.schoolId ||
+            (currentUser.schoolSmis && u.schoolSmis === currentUser.schoolSmis)
+        );
+
+  // Separate approved users and pending users for this school
+  const pendingUsers = schoolUsers.filter((u) => u.status === 'pending');
+  const approvedUsers = schoolUsers.filter((u) => u.status !== 'pending');
 
   const handleOpenAdd = () => {
     setEditingUser(null);
