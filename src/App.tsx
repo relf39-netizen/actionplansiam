@@ -1,0 +1,640 @@
+import React, { useState, useEffect } from 'react';
+import {
+  initialSchoolData,
+  initialFiscalYears,
+  initialUsers,
+  initialStudentsData,
+  initialRevenuesData,
+  initialBudgetAllocations,
+  initialLearnerActivities,
+  initialProjectsData,
+  initialTransactions,
+  initialStrategies,
+} from './data/initialData';
+import {
+  School,
+  FiscalYear,
+  User,
+  StudentLevel,
+  RevenueItem,
+  BudgetAllocation,
+  LearnerActivity,
+  Project,
+  BudgetTransaction,
+  Strategy,
+} from './types';
+import { Header } from './components/Header';
+import { Sidebar, ActiveTab } from './components/Sidebar';
+import { DashboardView } from './components/DashboardView';
+import { SchoolInfoView } from './components/SchoolInfoView';
+import { StudentDataView } from './components/StudentDataView';
+import { RevenueView } from './components/RevenueView';
+import { BudgetAllocationView } from './components/BudgetAllocationView';
+import { LearnerActivitiesView } from './components/LearnerActivitiesView';
+import { AiProjectWriterView } from './components/AiProjectWriterView';
+import { ProjectsView } from './components/ProjectsView';
+import { ProjectExpensesView } from './components/ProjectExpensesView';
+import { DisbursementsView } from './components/DisbursementsView';
+import { ActionPlanView } from './components/ActionPlanView';
+import { ReportsView } from './components/ReportsView';
+import { SettingsView } from './components/SettingsView';
+import { UsersView } from './components/UsersView';
+import { SuperAdminView } from './components/SuperAdminView';
+import { BudgetCutView } from './components/BudgetCutView';
+import { GasIntegrationModal } from './components/GasIntegrationModal';
+import { AuthView } from './components/AuthView';
+import { Lock, LogIn, Building2, Sparkles, Database, CheckCircle2, AlertTriangle } from 'lucide-react';
+
+export default function App() {
+  // App state
+  const [school, setSchool] = useState<School>(initialSchoolData);
+  const [allSchools, setAllSchools] = useState<School[]>([initialSchoolData]);
+  const [fiscalYears, setFiscalYears] = useState<FiscalYear[]>(initialFiscalYears);
+  const [activeFiscalYear, setActiveFiscalYear] = useState<FiscalYear>(
+    initialFiscalYears.find((fy) => fy.isActive) || initialFiscalYears[0]
+  );
+  const [users, setUsers] = useState<User[]>(initialUsers);
+  const [currentUser, setCurrentUser] = useState<User>(initialUsers[0]); // default admin
+  const [students, setStudents] = useState<StudentLevel[]>(initialStudentsData);
+  const [revenues, setRevenues] = useState<RevenueItem[]>(initialRevenuesData);
+  const [allocations, setAllocations] = useState<BudgetAllocation[]>(initialBudgetAllocations);
+  const [activities, setActivities] = useState<LearnerActivity[]>(initialLearnerActivities);
+  const [projects, setProjects] = useState<Project[]>(initialProjectsData);
+  const [transactions, setTransactions] = useState<BudgetTransaction[]>(initialTransactions);
+  const [strategies, setStrategies] = useState<Strategy[]>(initialStrategies);
+
+  // DB Status
+  const [dbStatus, setDbStatus] = useState<any>(null);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
+
+  // Navigation & UI state
+  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isGasModalOpen, setIsGasModalOpen] = useState(false);
+  const [selectedProjectIdForExpenses, setSelectedProjectIdForExpenses] = useState<number | undefined>(undefined);
+
+  // Initial load from real MySQL
+  useEffect(() => {
+    const fetchInitialData = async () => {
+      try {
+        // 1. Get database status
+        const dbRes = await fetch('/api/super-admin/db-status');
+        if (dbRes.ok) {
+          const text = await dbRes.text();
+          try {
+            const dbData = JSON.parse(text);
+            setDbStatus(dbData);
+          } catch (e) {}
+        }
+
+        // 2. Load all registered schools directly from MySQL
+        try {
+          const schRes = await fetch('/api/super-admin/schools');
+          if (schRes.ok) {
+            const schJson = await schRes.json();
+            if (schJson.success && Array.isArray(schJson.schools) && schJson.schools.length > 0) {
+              setAllSchools(schJson.schools);
+              setSchool((prev) => {
+                const found = schJson.schools.find((s: School) => s.id === prev.id);
+                return found || schJson.schools[0];
+              });
+            }
+          }
+        } catch (e) {}
+
+        // 3. Load stored application data from MySQL
+        const appRes = await fetch('/api/database');
+        if (appRes.ok) {
+          const text = await appRes.text();
+          try {
+            const appJson = JSON.parse(text);
+            if (appJson.success && appJson.data) {
+              const d = appJson.data;
+              if (d.school) setSchool(d.school);
+              if (Array.isArray(d.fiscalYears) && d.fiscalYears.length > 0) setFiscalYears(d.fiscalYears);
+              if (d.activeFiscalYear) setActiveFiscalYear(d.activeFiscalYear);
+              if (Array.isArray(d.users) && d.users.length > 0) setUsers(d.users);
+              if (Array.isArray(d.students) && d.students.length > 0) setStudents(d.students);
+              if (Array.isArray(d.revenues) && d.revenues.length > 0) setRevenues(d.revenues);
+              if (Array.isArray(d.allocations) && d.allocations.length > 0) setAllocations(d.allocations);
+              if (Array.isArray(d.activities) && d.activities.length > 0) setActivities(d.activities);
+              if (Array.isArray(d.projects)) setProjects(d.projects);
+              if (Array.isArray(d.transactions)) setTransactions(d.transactions);
+              if (Array.isArray(d.strategies) && d.strategies.length > 0) setStrategies(d.strategies);
+            }
+          } catch (e) {}
+        }
+
+        // 4. Restore user session if stored
+        try {
+          const savedUser = localStorage.getItem('school_current_user');
+          if (savedUser) {
+            const parsedUser = JSON.parse(savedUser);
+            if (parsedUser && parsedUser.id) {
+              setCurrentUser(parsedUser);
+            }
+          }
+        } catch (e) {}
+      } catch (err) {
+        console.error('Error fetching initial database state:', err);
+      } finally {
+        setIsDataLoaded(true);
+      }
+    };
+
+    fetchInitialData();
+  }, []);
+
+  // Helper to persist data to server / MySQL
+  const persistToServer = async (overrides: Record<string, any> = {}) => {
+    try {
+      const payload = {
+        school,
+        fiscalYears,
+        activeFiscalYear,
+        users,
+        students,
+        revenues,
+        allocations,
+        activities,
+        projects,
+        transactions,
+        strategies,
+        isRealMode,
+        ...overrides,
+      };
+
+      // Always backup school in localStorage
+      if (payload.school) {
+        localStorage.setItem('school_info', JSON.stringify(payload.school));
+      }
+      if (payload.isRealMode) {
+        localStorage.setItem('school_real_mode', 'true');
+      }
+
+      await fetch('/api/database', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      console.warn('Failed to auto-save to database endpoint, data saved in local session:', err);
+    }
+  };
+
+  // Auth screen state
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    return localStorage.getItem('school_logged_in') === 'true';
+  });
+
+  // Handle Auth Success from AuthView
+  const handleAuthSuccess = (user: User, loggedSchool?: School, isSuperAdmin?: boolean) => {
+    setCurrentUser(user);
+    if (loggedSchool) {
+      setSchool(loggedSchool);
+    }
+    setIsLoggedIn(true);
+    localStorage.setItem('school_logged_in', 'true');
+    localStorage.setItem('school_current_user', JSON.stringify(user));
+    if (isSuperAdmin) {
+      setActiveTab('super_admin');
+    }
+  };
+
+  // Handle Logout
+  const handleLogout = () => {
+    localStorage.removeItem('school_logged_in');
+    localStorage.removeItem('school_current_user');
+    setIsLoggedIn(false);
+  };
+
+  // Total student count
+  const totalStudents = students.reduce((sum, s) => sum + s.totalCount, 0);
+
+  // Total revenue
+  const totalRevenue = revenues.reduce((sum, r) => sum + r.calculatedAmount, 0);
+
+  // Count pending projects
+  const pendingProjectsCount = projects.filter((p) => !p.approvedBy).length;
+  // Count approved active projects
+  const approvedProjectsCount = projects.filter((p) => p.approvedBy && p.status !== 'completed').length;
+
+  // Sync revenue amounts when students change
+  const handleUpdateStudents = (updatedList: StudentLevel[]) => {
+    setStudents(updatedList);
+    const newTotal = updatedList.reduce((sum, s) => sum + s.totalCount, 0);
+
+    // Auto-sync eligible count on head-count dependent revenue items
+    const updatedRevenues = revenues.map((r) => {
+      if (!r.isCustomRate && (r.itemName.includes('นักเรียน') || r.id <= 6 || r.id === 8)) {
+        return {
+          ...r,
+          eligibleCount: newTotal,
+          calculatedAmount: Math.round(r.ratePerHead * newTotal),
+        };
+      }
+      return r;
+    });
+
+    setRevenues(updatedRevenues);
+    persistToServer({ students: updatedList, revenues: updatedRevenues });
+  };
+
+  const handleUpdateSchool = (updated: School) => {
+    setSchool(updated);
+    persistToServer({ school: updated });
+  };
+
+  const handleUpdateProjects = (updated: Project[]) => {
+    setProjects(updated);
+    persistToServer({ projects: updated });
+  };
+
+  const handleUpdateAllocations = (updated: BudgetAllocation[]) => {
+    setAllocations(updated);
+    persistToServer({ allocations: updated });
+  };
+
+  const handleUpdateRevenues = (updated: RevenueItem[]) => {
+    setRevenues(updated);
+    persistToServer({ revenues: updated });
+  };
+
+  const handleUpdateActivities = (updated: LearnerActivity[]) => {
+    setActivities(updated);
+    persistToServer({ activities: updated });
+  };
+
+  const handleUpdateTransactions = (updatedTrans: BudgetTransaction[], updatedProjects: Project[]) => {
+    setTransactions(updatedTrans);
+    setProjects(updatedProjects);
+    persistToServer({ transactions: updatedTrans, projects: updatedProjects });
+  };
+
+  // Handle preset rate application
+  const handleApplyPresetRates = () => {
+    setRevenues((prev) =>
+      prev.map((r) => {
+        if (r.itemName.includes('เงินอุดหนุนรายหัวนักเรียน')) {
+          return { ...r, ratePerHead: 2000, calculatedAmount: 2000 * r.eligibleCount };
+        }
+        if (r.itemName.includes('หนังสือเรียน')) {
+          return { ...r, ratePerHead: 650, calculatedAmount: 650 * r.eligibleCount };
+        }
+        if (r.itemName.includes('เครื่องแบบ')) {
+          return { ...r, ratePerHead: 400, calculatedAmount: 400 * r.eligibleCount };
+        }
+        if (r.itemName.includes('อุปกรณ์การเรียน')) {
+          return { ...r, ratePerHead: 220, calculatedAmount: 220 * r.eligibleCount };
+        }
+        if (r.itemName.includes('กิจกรรมพัฒนาผู้เรียน')) {
+          return { ...r, ratePerHead: 500, calculatedAmount: 500 * r.eligibleCount };
+        }
+        return r;
+      })
+    );
+  };
+
+  // Handle adding a new fiscal year
+  const handleAddFiscalYear = (yearNum: number) => {
+    const newId = fiscalYears.length + 1;
+    const newFy: FiscalYear = {
+      id: newId,
+      schoolId: 1,
+      year: yearNum,
+      startDate: `${yearNum - 543 - 1}-10-01`,
+      endDate: `${yearNum - 543}-09-30`,
+      isActive: true,
+      teacherCount: 15,
+      isProposalOpen: true,
+      proposalOpenDate: `${yearNum - 543 - 1}-10-01`,
+      proposalCloseDate: `${yearNum - 543}-01-31`,
+      proposalNotice: `เปิดรับการเสนอโครงการตามแผนปฏิบัติการประจำปีงบประมาณ พ.ศ. ${yearNum}`,
+    };
+    setFiscalYears((prev) => [...prev.map((y) => ({ ...y, isActive: false })), newFy]);
+    setActiveFiscalYear(newFy);
+  };
+
+  // Handle updating an existing fiscal year (e.g. proposal open/close settings)
+  const handleUpdateFiscalYear = (updatedFy: FiscalYear) => {
+    setFiscalYears((prev) => prev.map((fy) => (fy.id === updatedFy.id ? updatedFy : fy)));
+    setActiveFiscalYear(updatedFy);
+  };
+
+  // Handle restoring data from backup JSON
+  const handleRestoreData = (backup: any) => {
+    if (backup.school) setSchool(backup.school);
+    if (backup.activeFiscalYear) setActiveFiscalYear(backup.activeFiscalYear);
+    if (backup.students) setStudents(backup.students);
+    if (backup.revenues) setRevenues(backup.revenues);
+    if (backup.allocations) setAllocations(backup.allocations);
+    if (backup.projects) setProjects(backup.projects);
+    if (backup.transactions) setTransactions(backup.transactions);
+  };
+
+  // Switch to Project Expenses tab for specific project
+  const handleOpenExpensesForProject = (project: Project) => {
+    setSelectedProjectIdForExpenses(project.id);
+    setActiveTab('expenses');
+  };
+
+  // Real Login & Registration Screen if logged out (No demo buttons)
+  if (!isLoggedIn) {
+    return (
+      <AuthView
+        schools={allSchools.length > 0 ? allSchools : [school]}
+        onLoginSuccess={handleAuthSuccess}
+      />
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-100/70 flex flex-col font-sans text-slate-900">
+      {/* Top Header */}
+      <Header
+        school={school}
+        activeFiscalYear={activeFiscalYear}
+        currentUser={currentUser}
+        onSwitchUser={(user) => setCurrentUser(user)}
+        availableUsers={users}
+        onOpenGasModal={() => setIsGasModalOpen(true)}
+        onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+        onLogout={handleLogout}
+        onNavigateToSuperAdmin={() => setActiveTab('super_admin')}
+        dbConnected={Boolean(dbStatus?.connected)}
+        dbName={dbStatus?.database}
+      />
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar */}
+        <Sidebar
+          activeTab={activeTab}
+          onSelectTab={(tab) => setActiveTab(tab)}
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
+          onOpenGasModal={() => setIsGasModalOpen(true)}
+          onLogout={handleLogout}
+          currentUser={currentUser}
+          pendingCount={pendingProjectsCount}
+          approvedCount={approvedProjectsCount}
+        />
+
+        {/* Main Content Area */}
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 custom-scrollbar">
+          <div className="max-w-7xl mx-auto">
+            {/* MySQL Connection Failure Banner */}
+            {dbStatus && !dbStatus.connected && activeTab !== 'super_admin' && (
+              <div className="mb-6 p-4 rounded-2xl border border-rose-300 bg-rose-50 text-rose-900 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-rose-600 text-white font-bold flex items-center justify-center shrink-0 shadow-sm">
+                    <Database className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-rose-900">
+                        ยังไม่สามารถเชื่อมต่อฐานข้อมูล MySQL ได้
+                      </h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-200 text-rose-900">
+                        MySQL Disconnected
+                      </span>
+                    </div>
+                    <p className="text-xs text-rose-700 mt-0.5">
+                      {dbStatus.error || 'โปรดตรวจสอบชื่อโฮสต์, ฐานข้อมูล, ผู้ใช้ และรหัสผ่าน หรือเปิดสิทธิ์ ALL PRIVILEGES ใน cPanel MySQL'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('super_admin')}
+                  className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+                >
+                  <Database className="w-4 h-4" />
+                  <span>ไปที่การตั้งค่า MySQL ใน Super Admin</span>
+                </button>
+              </div>
+            )}
+            {school.isActive === false && activeTab !== 'super_admin' && (
+              <div className="mb-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-900 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center text-rose-600 font-bold shrink-0">
+                    !
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold">สถานศึกษาถูกระงับการใช้งานชั่วคราว (Inactive)</h4>
+                    <p className="text-xs text-rose-600">
+                      Super Admin ได้ระงับการใช้งานโรงเรียนนี้ เพื่อความปลอดภัยข้อมูลจึงถูกล็อกการบันทึก
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('super_admin')}
+                  className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs transition-colors shrink-0"
+                >
+                  เปิดหน้า Super Admin เพื่อจัดการ
+                </button>
+              </div>
+            )}
+
+            {activeTab === 'dashboard' && (
+              <DashboardView
+                school={school}
+                activeFiscalYear={activeFiscalYear}
+                students={students}
+                revenues={revenues}
+                allocations={allocations}
+                projects={projects}
+                transactions={transactions}
+                onNavigateTab={(tab) => setActiveTab(tab)}
+              />
+            )}
+
+            {activeTab === 'school' && (
+              <SchoolInfoView
+                school={school}
+                activeFiscalYear={activeFiscalYear}
+                onUpdateSchool={handleUpdateSchool}
+              />
+            )}
+
+            {activeTab === 'students' && (
+              <StudentDataView
+                students={students}
+                activeFiscalYear={activeFiscalYear}
+                onUpdateStudents={handleUpdateStudents}
+                onUpdateFiscalYear={handleUpdateFiscalYear}
+              />
+            )}
+
+            {activeTab === 'revenue' && (
+              <RevenueView
+                revenues={revenues}
+                activeFiscalYear={activeFiscalYear}
+                totalStudents={totalStudents}
+                onUpdateRevenues={handleUpdateRevenues}
+              />
+            )}
+
+            {activeTab === 'budget' && (
+              <BudgetAllocationView
+                allocations={allocations}
+                activeFiscalYear={activeFiscalYear}
+                totalRevenue={totalRevenue}
+                onUpdateAllocations={handleUpdateAllocations}
+                onNavigateToBudgetCut={() => setActiveTab('budget_cut')}
+              />
+            )}
+
+            {activeTab === 'learner_activities' && (
+              <LearnerActivitiesView
+                activities={activities}
+                activeFiscalYear={activeFiscalYear}
+                revenues={revenues}
+                onUpdateActivities={handleUpdateActivities}
+              />
+            )}
+
+            {activeTab === 'ai_project_writer' && (
+              <AiProjectWriterView
+                school={school}
+                fiscalYear={activeFiscalYear}
+                strategies={strategies}
+                users={users}
+                onSaveToProjects={(newProject) => {
+                  handleUpdateProjects([newProject, ...projects]);
+                }}
+                onNavigateToProjects={() => setActiveTab('projects')}
+              />
+            )}
+
+            {(activeTab === 'projects' || activeTab === 'approved_projects') && (
+              <ProjectsView
+                projects={projects}
+                currentUser={currentUser}
+                departments={allocations}
+                activeFiscalYear={activeFiscalYear}
+                school={school}
+                initialSubTab={activeTab === 'approved_projects' ? 'approved' : 'all'}
+                onSelectSubTab={(tab) => {
+                  if (tab === 'approved') {
+                    setActiveTab('approved_projects');
+                  } else {
+                    setActiveTab('projects');
+                  }
+                }}
+                onUpdateProjects={handleUpdateProjects}
+                onOpenExpensesForProject={handleOpenExpensesForProject}
+                onNavigateToAiWriter={() => setActiveTab('ai_project_writer')}
+              />
+            )}
+
+            {activeTab === 'budget_cut' && (
+              <BudgetCutView
+                projects={projects}
+                allocations={allocations}
+                activeFiscalYear={activeFiscalYear}
+                currentUser={currentUser}
+                school={school}
+                onUpdateProjects={handleUpdateProjects}
+                onUpdateAllocations={handleUpdateAllocations}
+                onNavigateToProjectExpenses={handleOpenExpensesForProject}
+              />
+            )}
+
+            {activeTab === 'expenses' && (
+              <ProjectExpensesView
+                projects={projects}
+                selectedProjectId={selectedProjectIdForExpenses}
+                onUpdateProjects={handleUpdateProjects}
+                onBackToProjects={() => setActiveTab('projects')}
+              />
+            )}
+
+            {activeTab === 'disbursements' && (
+              <DisbursementsView
+                transactions={transactions}
+                projects={projects}
+                currentUser={currentUser}
+                activeFiscalYear={activeFiscalYear}
+                onUpdateTransactions={handleUpdateTransactions}
+              />
+            )}
+
+            {activeTab === 'action_plan' && (
+              <ActionPlanView
+                projects={projects}
+                school={school}
+                activeFiscalYear={activeFiscalYear}
+              />
+            )}
+
+            {activeTab === 'reports' && (
+              <ReportsView
+                school={school}
+                activeFiscalYear={activeFiscalYear}
+                students={students}
+                revenues={revenues}
+                allocations={allocations}
+                activities={activities}
+                projects={projects}
+                transactions={transactions}
+              />
+            )}
+
+            {activeTab === 'settings' && (
+              <SettingsView
+                school={school}
+                fiscalYears={fiscalYears}
+                activeFiscalYear={activeFiscalYear}
+                onSelectFiscalYear={(fy) => setActiveFiscalYear(fy)}
+                onAddFiscalYear={handleAddFiscalYear}
+                onUpdateFiscalYear={handleUpdateFiscalYear}
+                students={students}
+                revenues={revenues}
+                allocations={allocations}
+                projects={projects}
+                transactions={transactions}
+                onRestoreData={handleRestoreData}
+                onApplyPresetRates={handleApplyPresetRates}
+                onOpenGasModal={() => setIsGasModalOpen(true)}
+              />
+            )}
+
+            {activeTab === 'users' && (
+              <UsersView
+                users={users}
+                currentUser={currentUser}
+                onUpdateUsers={(updated) => setUsers(updated)}
+              />
+            )}
+
+            {activeTab === 'super_admin' && (
+              <SuperAdminView
+                currentSchool={school}
+                onSelectSchool={(selected) => {
+                  setSchool(selected);
+                }}
+              />
+            )}
+          </div>
+        </main>
+      </div>
+
+      {/* Google Apps Script (Code.gs) & Google Sheets Integration Modal */}
+      <GasIntegrationModal
+        isOpen={isGasModalOpen}
+        onClose={() => setIsGasModalOpen(false)}
+        school={school}
+        fiscalYears={fiscalYears}
+        users={users}
+        students={students}
+        revenues={revenues}
+        allocations={allocations}
+        activities={activities}
+        projects={projects}
+        transactions={transactions}
+        strategies={strategies}
+      />
+    </div>
+  );
+}

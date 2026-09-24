@@ -1,0 +1,21 @@
+[
+  {
+    "id": 1,
+    "username": "1100000000001",
+    "citizenId": "1100000000001",
+    "fullName": "นายพิเชษฐ์ ปัญญาวงศ์",
+    "email": "pichet@school.ac.th",
+    "role": "admin",
+    "department": "ฝ่ายบริหารงานงบประมาณ",
+    "position": "ครูชำนาญการพิเศษ",
+    "phone": "081-234-5678",
+    "schoolId": 1,
+    "schoolSmis": "10000001",
+    "password": "1-6",
+    "isPasswordChanged": true,
+    "status": "approved",
+    "registeredAt": "2026-09-20T00:00:00.000Z",
+    "approvedAt": "2026-09-20T00:00:00.000Z",
+    "approvedBy": "Super Admin"
+  }
+]

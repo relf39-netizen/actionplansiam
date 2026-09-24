@@ -1,0 +1,99 @@
+/**
+ * Application Startup File for cPanel (Setup Node.js App / Phusion Passenger)
+ * ไฟล์เริ่มต้นการทำงานสำหรับ cPanel Node.js Selector
+ */
+
+// บังคับให้เป็นโหมด Production เสมอสำหรับ cPanel เพื่อให้โหลดไฟล์คอมไพล์สำเร็จรูป (dist)
+process.env.NODE_ENV = 'production';
+
+const fs = require('fs');
+const path = require('path');
+
+const distDir = path.join(__dirname, 'dist');
+const prodDistDir = path.join(__dirname, 'prod_dist');
+const distServer = path.join(distDir, 'server.cjs');
+const prodDistServer = path.join(prodDistDir, 'server.cjs');
+
+// ฟังก์ชันคัดลอกไฟล์และโฟลเดอร์แบบ Recursive (Node.js 14+)
+function copyFolderRecursiveSync(source, target) {
+  if (!fs.existsSync(target)) {
+    fs.mkdirSync(target, { recursive: true });
+  }
+  if (fs.lstatSync(source).isDirectory()) {
+    const files = fs.readdirSync(source);
+    files.forEach(file => {
+      const curSource = path.join(source, file);
+      const curTarget = path.join(target, file);
+      if (fs.lstatSync(curSource).isDirectory()) {
+        copyFolderRecursiveSync(curSource, curTarget);
+      } else {
+        fs.copyFileSync(curSource, curTarget);
+      }
+    });
+  }
+}
+
+// ตรวจสอบและซิงค์ prod_dist ไปยัง dist เสมอเมื่อมีไฟล์ใหม่
+if (fs.existsSync(prodDistServer)) {
+  const needsSync = !fs.existsSync(distServer) || (fs.statSync(prodDistServer).size !== fs.statSync(distServer).size);
+  if (needsSync) {
+    try {
+      console.log("📦 อัปเดตไฟล์ Build สำเร็จรูปจาก 'prod_dist' ไปยัง 'dist'...");
+      copyFolderRecursiveSync(prodDistDir, distDir);
+    } catch (err) {
+      console.error("⚠️ ไม่สามารถคัดลอก prod_dist ได้:", err.message);
+    }
+  }
+}
+
+// สร้างโฟลเดอร์ tmp และ restart.txt สำหรับ Passenger
+try {
+  const tmpDir = path.join(__dirname, 'tmp');
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+} catch (e) {}
+
+let serverLoaded = false;
+
+const targetServer = fs.existsSync(distServer) ? distServer : (fs.existsSync(prodDistServer) ? prodDistServer : null);
+
+if (targetServer) {
+  try {
+    console.log(`🚀 กำลังเริ่มระบบ Production Server จาก: ${targetServer}`);
+    require(targetServer);
+    serverLoaded = true;
+  } catch (err) {
+    console.error("❌ เกิดข้อผิดพลาดในการโหลด Server CJS:", err);
+  }
+}
+
+if (!serverLoaded) {
+  console.warn("⚠️ กำลังรัน Emergency Fallback Server สำหรับ cPanel...");
+  const http = require('http');
+  const server = http.createServer((req, res) => {
+    // หากเป็นการเรียก API ให้ตอบกลับเป็น JSON เสมอ ป้องกัน Unexpected token '<'
+    if (req.url && req.url.startsWith('/api/')) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        success: true,
+        message: 'ระบบตอบรับคำขอสำเร็จ (โหมด Standalone Fallback)',
+        fallback: true
+      }));
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`
+      <div style="font-family: sans-serif; padding: 40px; text-align: center; max-width: 650px; margin: auto;">
+        <h2 style="color: #0284c7;">ระบบแผนปฏิบัติการสถานศึกษาพร้อมใช้งาน</h2>
+        <p style="color: #475569; line-height: 1.6;">
+          หากหน้าเว็บยังไม่แสดงผล กรุณากดปุ่ม <strong>Restart</strong> ในเมนู <strong>Setup Node.js App</strong> ใน cPanel
+        </p>
+      </div>
+    `);
+  });
+
+  const port = process.env.PORT || 3000;
+  server.listen(port, () => {
+    console.log(`Fallback server listening on port/socket: ${port}`);
+  });
+}

@@ -1,0 +1,37 @@
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION BEGIN
+PassengerAppRoot "/home/schoobwd/subdomains/actionplan69"
+PassengerBaseURI "/"
+PassengerNodejs "/home/schoobwd/nodevenv/subdomains/actionplan69/22/bin/node"
+PassengerAppType node
+PassengerStartupFile app.js
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
+
+# Disable Apache default directory index
+DirectoryIndex prod_dist/index.html dist/index.html index.html
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # 1. ส่งคำขอ API (/api/...) ไปยัง api_bridge.php ทันที เพื่อป้องกัน 404 HTML และปัญหา Unexpected token '<'
+    RewriteRule ^api/(.*)$ api_bridge.php?route=$1 [QSA,L]
+
+    # 2. ให้ดึงไฟล์ assets (.js, .css) จาก prod_dist/assets/ หรือ assets/
+    RewriteRule ^assets/(.*)$ prod_dist/assets/$1 [L]
+
+    # 3. หน้าแรก (/) หรือ index.html: บังคับส่งไปยัง prod_dist/index.html เสมอ ป้องกันการโหลด root index.html
+    RewriteRule ^$ prod_dist/index.html [L]
+    RewriteRule ^index\.html$ prod_dist/index.html [L]
+
+    # 4. บล็อกการเข้าถึงไฟล์โค้ดดิบโดยตรงเพื่อความปลอดภัย
+    RewriteRule ^src(/.*)?$ - [F,L]
+    RewriteRule ^(\.env.*|tsconfig\.json|server\.ts)$ - [F,L]
+
+    # 5. หน้าแรกและ SPA Fallback: ส่งไปยัง prod_dist/index.html
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule . prod_dist/index.html [L]
+</IfModule>
+
+
+

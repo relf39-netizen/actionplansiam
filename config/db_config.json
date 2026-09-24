@@ -1,0 +1,8 @@
+{
+  "host": "localhost",
+  "port": 3306,
+  "dbname": "schoobwd_planaction",
+  "user": "root",
+  "pass": "",
+  "updatedAt": "2026-09-22T00:00:00.000Z"
+}

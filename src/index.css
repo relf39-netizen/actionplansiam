@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Prompt', 'Sarabun', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+}
+
+.font-sarabun {
+  font-family: 'Sarabun', 'TH Sarabun New', 'TH Sarabun PSK', sans-serif;
+}
+
+.sarabun-16 {
+  font-family: 'Sarabun', 'TH Sarabun New', 'TH Sarabun PSK', sans-serif;
+  font-size: 16pt;
+  line-height: 1.5;
+}
+
+.sarabun-heading {
+  font-family: 'Sarabun', 'TH Sarabun New', 'TH Sarabun PSK', sans-serif;
+  font-weight: 700;
+  font-size: 16pt;
+}
+
+.sarabun-title {
+  font-family: 'Sarabun', 'TH Sarabun New', 'TH Sarabun PSK', sans-serif;
+  font-weight: 700;
+  font-size: 18pt;
+  text-align: center;
+}
+
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+    font-family: 'Sarabun', 'TH Sarabun New', 'TH Sarabun PSK', sans-serif !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .print-break-inside-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .print-break-before {
+    break-before: page;
+    page-break-before: always;
+  }
+  @page {
+    size: A4 portrait;
+    margin: 2.5cm 2cm 2cm 2.5cm;
+  }
+
+  .printable-proposal, #official-project-proposal-sheet, #official-project-expense-sheet, #proposal-document {
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    font-family: 'Sarabun', 'TH Sarabun New', 'TH Sarabun PSK', sans-serif !important;
+    font-size: 16pt !important;
+    line-height: 1.5 !important;
+    color: #000000 !important;
+  }
+
+  .printable-proposal h1, .printable-proposal h2, .printable-proposal h3,
+  #official-project-proposal-sheet h1, #official-project-proposal-sheet h2, #official-project-proposal-sheet h3,
+  #official-project-expense-sheet h1, #official-project-expense-sheet h2, #official-project-expense-sheet h3,
+  .printable-proposal .official-heading, #official-project-proposal-sheet .official-heading, #official-project-expense-sheet .official-heading {
+    font-weight: 700 !important;
+    color: #000000 !important;
+  }
+
+  .printable-proposal table, #official-project-proposal-sheet table, #official-project-expense-sheet table, #proposal-document table {
+    font-size: 14pt !important;
+    border-color: #000000 !important;
+  }
+  .printable-proposal th, #official-project-proposal-sheet th, #official-project-expense-sheet th, #proposal-document th {
+    font-weight: 700 !important;
+    border-color: #000000 !important;
+  }
+  .printable-proposal td, #official-project-proposal-sheet td, #official-project-expense-sheet td, #proposal-document td {
+    border-color: #000000 !important;
+  }
+}
+
