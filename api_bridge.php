@@ -157,6 +157,26 @@ function getUsersPath() {
 }
 
 function loadUsersData() {
+    $pdo = getDbPDO();
+    if ($pdo) {
+        try {
+            ensureUsersTableAndAdmins($pdo);
+            $stmt = $pdo->query("SELECT id, school_id as schoolId, username, citizen_id as citizenId, password_hash as password, full_name as fullName, email, role, department, position, phone, avatar, is_active as isActive, is_password_changed as isPasswordChanged, status, created_at as registeredAt FROM `users` ORDER BY id ASC");
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            if (is_array($rows) && count($rows) > 0) {
+                return array_map(function($u) {
+                    $u['id'] = intval($u['id']);
+                    $u['schoolId'] = intval($u['schoolId']);
+                    $u['isActive'] = ($u['isActive'] == 1 || $u['isActive'] === true || $u['isActive'] === '1');
+                    $u['isPasswordChanged'] = ($u['isPasswordChanged'] == 1 || $u['isPasswordChanged'] === true || $u['isPasswordChanged'] === '1');
+                    return $u;
+                }, $rows);
+            }
+        } catch (Exception $e) {
+            error_log("loadUsersData MySQL error: " . $e->getMessage());
+        }
+    }
+
     $file = getUsersPath();
     if (file_exists($file)) {
         $content = file_get_contents($file);
@@ -167,7 +187,57 @@ function loadUsersData() {
 }
 
 function saveUsersData($data) {
+    // 1. บันทึกลง JSON เป็น Cache สำรอง
     file_put_contents(getUsersPath(), json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+
+    // 2. ซิงค์ลง MySQL users table ด้วยเสมอ
+    $pdo = getDbPDO();
+    if ($pdo && is_array($data)) {
+        try {
+            ensureUsersTableAndAdmins($pdo);
+            $stmt = $pdo->prepare("INSERT INTO `users` 
+                (`id`, `school_id`, `username`, `citizen_id`, `password_hash`, `full_name`, `email`, `role`, `department`, `position`, `phone`, `is_active`, `is_password_changed`, `status`)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  school_id = VALUES(school_id),
+                  username = VALUES(username),
+                  citizen_id = VALUES(citizen_id),
+                  password_hash = VALUES(password_hash),
+                  full_name = VALUES(full_name),
+                  email = VALUES(email),
+                  role = VALUES(role),
+                  department = VALUES(department),
+                  position = VALUES(position),
+                  phone = VALUES(phone),
+                  is_active = VALUES(is_active),
+                  is_password_changed = VALUES(is_password_changed),
+                  status = VALUES(status)");
+
+            foreach ($data as $u) {
+                if (empty($u['username']) || empty($u['fullName'])) continue;
+                $uId = !empty($u['id']) ? intval($u['id']) : null;
+                $schId = !empty($u['schoolId']) ? intval($u['schoolId']) : 1;
+                $stmt->execute([
+                    $uId,
+                    $schId,
+                    trim($u['username']),
+                    trim($u['citizenId'] ?? ''),
+                    trim($u['password'] ?? $u['password_hash'] ?? '123456'),
+                    trim($u['fullName']),
+                    trim($u['email'] ?? ''),
+                    trim($u['role'] ?? 'teacher'),
+                    trim($u['department'] ?? ''),
+                    trim($u['position'] ?? ''),
+                    trim($u['phone'] ?? ''),
+                    isset($u['isActive']) ? ($u['isActive'] ? 1 : 0) : 1,
+                    !empty($u['isPasswordChanged']) ? 1 : 0,
+                    trim($u['status'] ?? 'approved')
+                ]);
+            }
+        } catch (Exception $e) {
+            error_log("saveUsersData MySQL sync error: " . $e->getMessage());
+        }
+    }
 }
 
 function getSchoolsPath() {
@@ -230,6 +300,87 @@ function ensureSchoolsTable($pdo) {
     }
 }
 
+function ensureUsersTableAndAdmins($pdo) {
+    if (!$pdo) return;
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `users` (
+            `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `school_id` INT UNSIGNED NOT NULL DEFAULT 1,
+            `username` VARCHAR(100) NOT NULL,
+            `password_hash` VARCHAR(255) DEFAULT '123456',
+            `citizen_id` VARCHAR(20) DEFAULT NULL,
+            `full_name` VARCHAR(150) NOT NULL,
+            `email` VARCHAR(150) DEFAULT NULL,
+            `role` VARCHAR(50) NOT NULL DEFAULT 'teacher',
+            `department` VARCHAR(100) DEFAULT NULL,
+            `position` VARCHAR(150) DEFAULT NULL,
+            `phone` VARCHAR(50) DEFAULT NULL,
+            `is_active` TINYINT(1) DEFAULT 1,
+            `status` VARCHAR(20) DEFAULT 'approved',
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
+
+        $cols = $pdo->query("SHOW COLUMNS FROM `users`")->fetchAll(PDO::FETCH_COLUMN);
+        if ($cols && is_array($cols)) {
+            if (!in_array('password_hash', $cols)) {
+                $pdo->exec("ALTER TABLE `users` ADD COLUMN `password_hash` VARCHAR(255) DEFAULT '123456' AFTER `username`");
+            }
+            if (!in_array('status', $cols)) {
+                $pdo->exec("ALTER TABLE `users` ADD COLUMN `status` VARCHAR(20) DEFAULT 'approved' AFTER `is_active`");
+            }
+            if (!in_array('is_password_changed', $cols)) {
+                $pdo->exec("ALTER TABLE `users` ADD COLUMN `is_password_changed` TINYINT(1) DEFAULT 0 AFTER `is_active`");
+            }
+            if (!in_array('avatar', $cols)) {
+                $pdo->exec("ALTER TABLE `users` ADD COLUMN `avatar` VARCHAR(255) DEFAULT NULL AFTER `phone`");
+            }
+        }
+
+        // ซิงค์ Admin จากตาราง schools เข้าสู่ตาราง users สำหรับทุกโรงเรียนที่ยังไม่มี Admin ใน users หรืออัปเดตรหัสผ่านให้ตรงกัน
+        $schoolsStmt = $pdo->query("SELECT id, name, smis_code, admin_username, admin_password_plain, phone, email FROM `schools`");
+        $allSchools = $schoolsStmt ? $schoolsStmt->fetchAll(PDO::FETCH_ASSOC) : [];
+        if (is_array($allSchools)) {
+            foreach ($allSchools as $s) {
+                if (empty($s['id'])) continue;
+                $adminUser = trim($s['admin_username'] ?? ('admin_' . ($s['smis_code'] ?? $s['id'])));
+                if (empty($adminUser)) $adminUser = 'admin';
+                $adminPass = trim($s['admin_password_plain'] ?? '123456');
+                if (empty($adminPass)) $adminPass = '123456';
+                $schoolName = trim($s['name'] ?? ('โรงเรียนรหัส ' . ($s['smis_code'] ?? $s['id'])));
+
+                $checkUserStmt = $pdo->prepare("SELECT id, password_hash FROM `users` WHERE `school_id` = ? AND (`role` = 'admin' OR `username` = ?) LIMIT 1");
+                $checkUserStmt->execute([$s['id'], $adminUser]);
+                $existingUser = $checkUserStmt->fetch(PDO::FETCH_ASSOC);
+
+                if (!$existingUser) {
+                    $insertUserStmt = $pdo->prepare("INSERT INTO `users` 
+                        (`school_id`, `username`, `password_hash`, `full_name`, `citizen_id`, `email`, `role`, `department`, `position`, `phone`, `is_active`, `status`)
+                        VALUES (?, ?, ?, ?, ?, ?, 'admin', 'กลุ่มบริหารงานงบประมาณ', 'เจ้าหน้าที่แผนงานและงบประมาณ', ?, 1, 'approved')");
+                    $insertUserStmt->execute([
+                        $s['id'],
+                        $adminUser,
+                        $adminPass,
+                        "ผู้ดูแลระบบ ({$schoolName})",
+                        $s['smis_code'] ?: $adminUser,
+                        $s['email'] ?? '',
+                        $s['phone'] ?? ''
+                    ]);
+                } else {
+                    // หากมีอยู่แล้วแต่ password_hash ว่าง ให้เติมรหัสผ่านจาก schools
+                    if (empty($existingUser['password_hash'])) {
+                        $updStmt = $pdo->prepare("UPDATE `users` SET `password_hash` = ? WHERE `id` = ?");
+                        $updStmt->execute([$adminPass, $existingUser['id']]);
+                    }
+                }
+            }
+        }
+    } catch (Exception $e) {
+        error_log("Failed to ensure users table & admins: " . $e->getMessage());
+    }
+}
+
 function loadSchoolsData() {
     global $lastDbError;
     $pdo = getDbPDO();
@@ -237,6 +388,7 @@ function loadSchoolsData() {
         throw new Exception("ไม่สามารถเชื่อมต่อฐานข้อมูล MySQL ได้: " . ($lastDbError ?: "โปรดตรวจสอบการตั้งค่า Host, Database, User, Password"));
     }
     ensureSchoolsTable($pdo);
+    ensureUsersTableAndAdmins($pdo);
     $stmt = $pdo->query("SELECT id, school_code as schoolCode, smis_code as smisCode, is_active as isActive, school_key as schoolKey, admin_username as adminUsername, admin_password_plain as adminPasswordPlain, name, province, education_area as educationArea, director_name as directorName, phone, email, student_count as studentCount, project_count as projectCount, total_budget as totalBudget, notes FROM `schools` ORDER BY id ASC");
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
     if (!is_array($rows)) return [];
@@ -257,6 +409,7 @@ function insertSchoolToDatabase($newSchool) {
         throw new Exception("ไม่สามารถเชื่อมต่อฐานข้อมูล MySQL ได้: " . ($lastDbError ?: "โปรดตรวจสอบการตั้งค่า Host, Database, User, Password"));
     }
     ensureSchoolsTable($pdo);
+    ensureUsersTableAndAdmins($pdo);
     $stmt = $pdo->prepare("INSERT INTO `schools` 
         (`school_code`, `smis_code`, `is_active`, `school_key`, `admin_username`, `admin_password_plain`, `name`, `province`, `education_area`, `director_name`, `phone`, `email`, `student_count`, `project_count`, `total_budget`, `notes`)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -295,6 +448,39 @@ function insertSchoolToDatabase($newSchool) {
         $foundId = $stmtFind->fetchColumn();
         if ($foundId) $newSchool['id'] = intval($foundId);
     }
+
+    // บันทึกหรืออัปเดตบัญชี Admin ลงในตาราง users ของ MySQL โดยตรง
+    try {
+        $adminUser = trim($newSchool['adminUsername'] ?? ('admin_' . $newSchool['smisCode']));
+        $adminPass = trim($newSchool['adminPasswordPlain'] ?? '123456');
+        $schoolName = trim($newSchool['name'] ?? '');
+        $schoolId = $newSchool['id'];
+
+        $checkAdminStmt = $pdo->prepare("SELECT id FROM `users` WHERE `school_id` = ? AND (`username` = ? OR `role` = 'admin') LIMIT 1");
+        $checkAdminStmt->execute([$schoolId, $adminUser]);
+        $existingAdminId = $checkAdminStmt->fetchColumn();
+
+        if ($existingAdminId) {
+            $updAdmin = $pdo->prepare("UPDATE `users` SET `username` = ?, `password_hash` = ?, `full_name` = ?, `phone` = ?, `email` = ?, `is_active` = 1, `status` = 'approved' WHERE `id` = ?");
+            $updAdmin->execute([$adminUser, $adminPass, "ผู้ดูแลระบบ ({$schoolName})", $newSchool['phone'] ?? '', $newSchool['email'] ?? '', $existingAdminId]);
+        } else {
+            $insAdmin = $pdo->prepare("INSERT INTO `users` 
+                (`school_id`, `username`, `password_hash`, `full_name`, `citizen_id`, `email`, `role`, `department`, `position`, `phone`, `is_active`, `status`)
+                VALUES (?, ?, ?, ?, ?, ?, 'admin', 'กลุ่มบริหารงานงบประมาณ', 'เจ้าหน้าที่แผนงานและงบประมาณ', ?, 1, 'approved')");
+            $insAdmin->execute([
+                $schoolId,
+                $adminUser,
+                $adminPass,
+                "ผู้ดูแลระบบ ({$schoolName})",
+                $newSchool['smisCode'] ?: $adminUser,
+                $newSchool['email'] ?? '',
+                $newSchool['phone'] ?? ''
+            ]);
+        }
+    } catch (Exception $e) {
+        error_log("Failed to insert admin into users: " . $e->getMessage());
+    }
+
     return $newSchool;
 }
 

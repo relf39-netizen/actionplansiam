@@ -447,17 +447,41 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
     await conn.query(`CREATE TABLE IF NOT EXISTS \`users\` (
       \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
       \`school_id\` INT UNSIGNED NOT NULL,
-      \`username\` VARCHAR(50) NOT NULL,
+      \`username\` VARCHAR(100) NOT NULL,
       \`citizen_id\` VARCHAR(20) DEFAULT NULL,
+      \`password_hash\` VARCHAR(255) NOT NULL DEFAULT '123456',
       \`full_name\` VARCHAR(150) NOT NULL,
       \`email\` VARCHAR(100) DEFAULT NULL,
       \`role\` VARCHAR(50) NOT NULL DEFAULT 'teacher',
       \`department\` VARCHAR(100) DEFAULT NULL,
       \`position\` VARCHAR(150) DEFAULT NULL,
       \`phone\` VARCHAR(50) DEFAULT NULL,
+      \`avatar\` VARCHAR(255) DEFAULT NULL,
       \`is_active\` TINYINT(1) DEFAULT 1,
+      \`is_password_changed\` TINYINT(1) DEFAULT 0,
+      \`status\` VARCHAR(20) DEFAULT 'approved',
+      \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (\`id\`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+
+    // Ensure columns for users table exist
+    try {
+      const [uCols]: any = await conn.query('SHOW COLUMNS FROM `users`');
+      const existingUCols = (uCols || []).map((c: any) => c.Field);
+      if (!existingUCols.includes('password_hash')) {
+        await conn.query('ALTER TABLE `users` ADD COLUMN `password_hash` VARCHAR(255) NOT NULL DEFAULT "123456" AFTER `citizen_id`');
+      }
+      if (!existingUCols.includes('status')) {
+        await conn.query('ALTER TABLE `users` ADD COLUMN `status` VARCHAR(20) DEFAULT "approved" AFTER `is_active`');
+      }
+      if (!existingUCols.includes('is_password_changed')) {
+        await conn.query('ALTER TABLE `users` ADD COLUMN `is_password_changed` TINYINT(1) DEFAULT 0 AFTER `is_active`');
+      }
+      if (!existingUCols.includes('avatar')) {
+        await conn.query('ALTER TABLE `users` ADD COLUMN `avatar` VARCHAR(255) DEFAULT NULL AFTER `phone`');
+      }
+    } catch (e) {}
 
     await conn.query(`CREATE TABLE IF NOT EXISTS \`students\` (
       \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -659,28 +683,61 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
         const keptUserIds: number[] = [];
         for (const u of data.users) {
           if (!u.username || !u.fullName) continue;
+          const userPass = u.password || u.passwordHash || '123456';
           if (u.id && u.id > 0) {
             await conn.query(
-              `INSERT INTO users (id, school_id, username, citizen_id, full_name, email, role, department, position, phone, is_active)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `INSERT INTO users (id, school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON DUPLICATE KEY UPDATE
                  username = VALUES(username),
                  citizen_id = VALUES(citizen_id),
+                 password_hash = VALUES(password_hash),
                  full_name = VALUES(full_name),
                  email = VALUES(email),
                  role = VALUES(role),
                  department = VALUES(department),
                  position = VALUES(position),
                  phone = VALUES(phone),
-                 is_active = VALUES(is_active)`,
-              [u.id, schoolId, u.username, u.citizenId || '', u.fullName, u.email || '', u.role || 'teacher', u.department || '', u.position || '', u.phone || '', u.isActive ? 1 : 0]
+                 is_active = VALUES(is_active),
+                 status = VALUES(status),
+                 is_password_changed = VALUES(is_password_changed)`,
+              [
+                u.id,
+                schoolId,
+                u.username,
+                u.citizenId || '',
+                userPass,
+                u.fullName,
+                u.email || '',
+                u.role || 'teacher',
+                u.department || '',
+                u.position || '',
+                u.phone || '',
+                u.isActive !== false ? 1 : 0,
+                u.status || 'approved',
+                u.isPasswordChanged ? 1 : 0
+              ]
             );
             keptUserIds.push(u.id);
           } else {
             const [ur]: any = await conn.query(
-              `INSERT INTO users (school_id, username, citizen_id, full_name, email, role, department, position, phone, is_active)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [schoolId, u.username, u.citizenId || '', u.fullName, u.email || '', u.role || 'teacher', u.department || '', u.position || '', u.phone || '', u.isActive ? 1 : 0]
+              `INSERT INTO users (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                schoolId,
+                u.username,
+                u.citizenId || '',
+                userPass,
+                u.fullName,
+                u.email || '',
+                u.role || 'teacher',
+                u.department || '',
+                u.position || '',
+                u.phone || '',
+                u.isActive !== false ? 1 : 0,
+                u.status || 'approved',
+                u.isPasswordChanged ? 1 : 0
+              ]
             );
             if (ur.insertId) keptUserIds.push(ur.insertId);
           }
@@ -1117,13 +1174,17 @@ export async function loadAppData(schoolIdParam?: number): Promise<any> {
         schoolId: u.school_id,
         username: u.username,
         citizenId: u.citizen_id,
+        password: u.password_hash || '123456',
         fullName: u.full_name,
         email: u.email,
         role: u.role,
         department: u.department,
         position: u.position,
         phone: u.phone,
+        avatar: u.avatar,
         isActive: u.is_active === 1,
+        status: u.status || 'approved',
+        isPasswordChanged: u.is_password_changed === 1,
       })),
       students: (students || []).map((st: any) => ({
         id: st.id,

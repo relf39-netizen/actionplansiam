@@ -706,24 +706,189 @@ function saveSuperAdminData(data: any) {
   }
 }
 
-function getStoredUsers(): any[] {
+async function getStoredUsers(): Promise<any[]> {
+  try {
+    const conn = await getDirectConnection();
+    // Ensure table & columns exist
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`users\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_id\` INT UNSIGNED NOT NULL,
+      \`username\` VARCHAR(100) NOT NULL,
+      \`citizen_id\` VARCHAR(20) DEFAULT NULL,
+      \`password_hash\` VARCHAR(255) NOT NULL DEFAULT '123456',
+      \`full_name\` VARCHAR(150) NOT NULL,
+      \`email\` VARCHAR(100) DEFAULT NULL,
+      \`role\` VARCHAR(50) NOT NULL DEFAULT 'teacher',
+      \`department\` VARCHAR(100) DEFAULT NULL,
+      \`position\` VARCHAR(150) DEFAULT NULL,
+      \`phone\` VARCHAR(50) DEFAULT NULL,
+      \`avatar\` VARCHAR(255) DEFAULT NULL,
+      \`is_active\` TINYINT(1) DEFAULT 1,
+      \`is_password_changed\` TINYINT(1) DEFAULT 0,
+      \`status\` VARCHAR(20) DEFAULT 'approved',
+      \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (\`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+
+    // Ensure columns exist
+    try {
+      const [uCols]: any = await conn.query('SHOW COLUMNS FROM `users`');
+      const existingUCols = (uCols || []).map((c: any) => c.Field);
+      if (!existingUCols.includes('password_hash')) {
+        await conn.query('ALTER TABLE `users` ADD COLUMN `password_hash` VARCHAR(255) NOT NULL DEFAULT "123456" AFTER `citizen_id`');
+      }
+      if (!existingUCols.includes('status')) {
+        await conn.query('ALTER TABLE `users` ADD COLUMN `status` VARCHAR(20) DEFAULT "approved" AFTER `is_active`');
+      }
+      if (!existingUCols.includes('is_password_changed')) {
+        await conn.query('ALTER TABLE `users` ADD COLUMN `is_password_changed` TINYINT(1) DEFAULT 0 AFTER `is_active`');
+      }
+      if (!existingUCols.includes('avatar')) {
+        await conn.query('ALTER TABLE `users` ADD COLUMN `avatar` VARCHAR(255) DEFAULT NULL AFTER `phone`');
+      }
+    } catch (e) {}
+
+    // Auto-sync missing Admins from schools table to users table
+    const [schools]: any = await conn.query('SELECT id, name, smis_code, admin_username, admin_password_plain, phone, email FROM `schools`');
+    for (const s of (schools || [])) {
+      if (!s.id) continue;
+      const adminUser = (s.admin_username || `admin_${s.smis_code || s.id}`).trim();
+      const adminPass = (s.admin_password_plain || '123456').trim();
+      const [uRows]: any = await conn.query('SELECT id, password_hash FROM `users` WHERE school_id = ? AND (username = ? OR role = "admin") LIMIT 1', [s.id, adminUser]);
+      if (!uRows || uRows.length === 0) {
+        await conn.query(
+          `INSERT INTO \`users\` (school_id, username, password_hash, full_name, citizen_id, email, role, department, position, phone, is_active, status, is_password_changed)
+           VALUES (?, ?, ?, ?, ?, ?, 'admin', 'กลุ่มบริหารงานงบประมาณ', 'เจ้าหน้าที่แผนงานและงบประมาณ', ?, 1, 'approved', 0)`,
+          [s.id, adminUser, adminPass, `ผู้ดูแลระบบ (${s.name})`, s.smis_code || adminUser, s.email || '', s.phone || '']
+        );
+      } else if (!uRows[0].password_hash) {
+        await conn.query('UPDATE `users` SET password_hash = ? WHERE id = ?', [adminPass, uRows[0].id]);
+      }
+    }
+
+    const [rows]: any = await conn.query('SELECT * FROM `users` ORDER BY id ASC');
+    await conn.end();
+
+    const dbUsers = (rows || []).map((u: any) => ({
+      id: u.id,
+      schoolId: u.school_id,
+      username: u.username,
+      citizenId: u.citizen_id,
+      password: u.password_hash || '123456',
+      fullName: u.full_name,
+      email: u.email,
+      role: u.role,
+      department: u.department,
+      position: u.position,
+      phone: u.phone,
+      avatar: u.avatar,
+      isActive: u.is_active === 1,
+      status: u.status || 'approved',
+      isPasswordChanged: u.is_password_changed === 1,
+      registeredAt: u.created_at,
+    }));
+
+    if (dbUsers.length > 0) {
+      // Sync backup cache file
+      try {
+        const dir = path.dirname(USERS_DATA_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(USERS_DATA_FILE, JSON.stringify(dbUsers, null, 2), 'utf-8');
+      } catch (e) {}
+      return dbUsers;
+    }
+  } catch (e) {
+    console.error('getStoredUsers MySQL query failed, falling back to local file:', e);
+  }
+
+  // Fallback to local JSON file
   try {
     if (fs.existsSync(USERS_DATA_FILE)) {
       return JSON.parse(fs.readFileSync(USERS_DATA_FILE, 'utf-8'));
     }
   } catch (e) {
-    console.error('Error reading users data:', e);
+    console.error('Error reading users data file:', e);
   }
   return [];
 }
 
-function saveStoredUsers(users: any[]) {
+async function saveStoredUsers(users: any[]) {
+  // 1. Write to cache file
   try {
     const dir = path.dirname(USERS_DATA_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), 'utf-8');
   } catch (e) {
-    console.error('Error saving users data:', e);
+    console.error('Error saving users data file:', e);
+  }
+
+  // 2. Sync to MySQL users table
+  try {
+    const conn = await getDirectConnection();
+    for (const u of users) {
+      if (!u.username || !u.fullName) continue;
+      const userPass = u.password || u.passwordHash || '123456';
+      if (u.id && u.id > 0) {
+        await conn.query(
+          `INSERT INTO \`users\` (id, school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             school_id = VALUES(school_id),
+             username = VALUES(username),
+             citizen_id = VALUES(citizen_id),
+             password_hash = VALUES(password_hash),
+             full_name = VALUES(full_name),
+             email = VALUES(email),
+             role = VALUES(role),
+             department = VALUES(department),
+             position = VALUES(position),
+             phone = VALUES(phone),
+             is_active = VALUES(is_active),
+             status = VALUES(status),
+             is_password_changed = VALUES(is_password_changed)`,
+          [
+            u.id,
+            u.schoolId || 1,
+            u.username,
+            u.citizenId || '',
+            userPass,
+            u.fullName,
+            u.email || '',
+            u.role || 'teacher',
+            u.department || '',
+            u.position || '',
+            u.phone || '',
+            u.isActive !== false ? 1 : 0,
+            u.status || 'approved',
+            u.isPasswordChanged ? 1 : 0,
+          ]
+        );
+      } else {
+        await conn.query(
+          `INSERT INTO \`users\` (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            u.schoolId || 1,
+            u.username,
+            u.citizenId || '',
+            userPass,
+            u.fullName,
+            u.email || '',
+            u.role || 'teacher',
+            u.department || '',
+            u.position || '',
+            u.phone || '',
+            u.isActive !== false ? 1 : 0,
+            u.status || 'approved',
+            u.isPasswordChanged ? 1 : 0,
+          ]
+        );
+      }
+    }
+    await conn.end();
+  } catch (e) {
+    console.error('Error saving users to MySQL:', e);
   }
 }
 
@@ -1041,6 +1206,35 @@ app.post('/api/super-admin/schools', async (req, res) => {
     if (result && result.insertId) {
       newSchool.id = result.insertId;
     }
+
+    // Insert or update Admin in MySQL users table directly
+    try {
+      const adminUser = newSchool.adminUsername;
+      const adminPass = newSchool.adminPasswordPlain;
+      const schoolName = newSchool.name;
+      const schoolId = newSchool.id;
+
+      const [existingUsers]: any = await conn.query(
+        'SELECT id FROM `users` WHERE school_id = ? AND (username = ? OR role = "admin") LIMIT 1',
+        [schoolId, adminUser]
+      );
+
+      if (existingUsers && existingUsers.length > 0) {
+        await conn.query(
+          'UPDATE `users` SET username = ?, password_hash = ?, full_name = ?, phone = ?, email = ?, is_active = 1, status = "approved" WHERE id = ?',
+          [adminUser, adminPass, `ผู้ดูแลระบบ (${schoolName})`, newSchool.phone || '', newSchool.email || '', existingUsers[0].id]
+        );
+      } else {
+        await conn.query(
+          `INSERT INTO \`users\` (school_id, username, password_hash, full_name, citizen_id, email, role, department, position, phone, is_active, status, is_password_changed)
+           VALUES (?, ?, ?, ?, ?, ?, 'admin', 'กลุ่มบริหารงานงบประมาณ', 'เจ้าหน้าที่แผนงานและงบประมาณ', ?, 1, 'approved', 0)`,
+          [schoolId, adminUser, adminPass, `ผู้ดูแลระบบ (${schoolName})`, newSchool.smisCode || adminUser, newSchool.email || '', newSchool.phone || '']
+        );
+      }
+    } catch (adminErr) {
+      console.error('Error inserting admin user on school creation:', adminErr);
+    }
+
     await conn.end();
 
     let schools = getStoredSchools();
@@ -1258,7 +1452,7 @@ app.post('/api/auth/super-admin/change-password', (req, res) => {
 });
 
 // --- TEACHER & STAFF REGISTRATION (SMIS 8 Digits + Citizen ID) ---
-app.post('/api/auth/register-teacher', (req, res) => {
+app.post('/api/auth/register-teacher', async (req, res) => {
   const { smisCode, citizenId, fullName, position, phone, email } = req.body || {};
   const cleanSmis = (smisCode || '').trim();
   const cleanCitizenId = (citizenId || '').replace(/[^0-9]/g, '');
@@ -1286,7 +1480,7 @@ app.post('/api/auth/register-teacher', (req, res) => {
   }
 
   // 2. ตรวจสอบว่า Citizen ID นี้ลงทะเบียนไปแล้วหรือไม่
-  const users = getStoredUsers();
+  const users = await getStoredUsers();
   const existingUser = users.find((u: any) => u.username === cleanCitizenId || u.citizenId === cleanCitizenId);
   if (existingUser) {
     return res.status(409).json({
@@ -1316,7 +1510,7 @@ app.post('/api/auth/register-teacher', (req, res) => {
   };
 
   users.push(newUser);
-  saveStoredUsers(users);
+  await saveStoredUsers(users);
 
   return res.json({
     success: true,
@@ -1327,7 +1521,7 @@ app.post('/api/auth/register-teacher', (req, res) => {
 });
 
 // --- UNIFIED LOGIN (Super Admin & School Staff) ---
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body || {};
   const cleanUser = (username || '').trim();
   const cleanPass = (password || '').trim();
@@ -1355,7 +1549,7 @@ app.post('/api/auth/login', (req, res) => {
   }
 
   // 2. ตรวจสอบบัญชีคุณครู/บุคลากรโรงเรียน (ด้วย Citizen ID หรือ Username)
-  const users = getStoredUsers();
+  const users = await getStoredUsers();
   const targetUser = users.find((u: any) => u.username === cleanUser || u.citizenId === cleanUser);
 
   if (!targetUser) {
@@ -1402,13 +1596,13 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // --- CHANGE USER PASSWORD ---
-app.post('/api/auth/change-password', (req, res) => {
+app.post('/api/auth/change-password', async (req, res) => {
   const { userId, newPassword } = req.body || {};
   if (!userId || !newPassword || newPassword.trim().length < 4) {
     return res.status(400).json({ success: false, message: 'รหัสผ่านใหม่ต้องมีความยาวอย่างน้อย 4 ตัวอักษร' });
   }
 
-  const users = getStoredUsers();
+  const users = await getStoredUsers();
   const targetUser = users.find((u: any) => u.id === Number(userId));
 
   if (!targetUser) {
@@ -1417,19 +1611,19 @@ app.post('/api/auth/change-password', (req, res) => {
 
   targetUser.password = newPassword.trim();
   targetUser.isPasswordChanged = true;
-  saveStoredUsers(users);
+  await saveStoredUsers(users);
 
   return res.json({ success: true, message: 'ตั้งรหัสผ่านใหม่เรียบร้อยแล้ว' });
 });
 
 // --- SUPER ADMIN ASSIGN SCHOOL ADMIN ---
-app.post('/api/super-admin/set-school-admin', (req, res) => {
+app.post('/api/super-admin/set-school-admin', async (req, res) => {
   const { schoolId, teacherId } = req.body || {};
   if (!schoolId || !teacherId) {
     return res.status(400).json({ success: false, message: 'กรุณาระบุ schoolId และ teacherId' });
   }
 
-  const users = getStoredUsers();
+  const users = await getStoredUsers();
   const schools = getStoredSchools();
 
   const assignedTeacher = users.find((u: any) => u.id === Number(teacherId) && u.schoolId === Number(schoolId));
@@ -1439,7 +1633,7 @@ app.post('/api/super-admin/set-school-admin', (req, res) => {
 
   assignedTeacher.role = 'admin';
   assignedTeacher.status = 'approved';
-  saveStoredUsers(users);
+  await saveStoredUsers(users);
 
   const targetSchool = schools.find((s: any) => s.id === Number(schoolId));
   if (targetSchool) {
@@ -1456,9 +1650,9 @@ app.post('/api/super-admin/set-school-admin', (req, res) => {
 });
 
 // --- SCHOOL USERS MANAGEMENT ---
-app.get('/api/school/users', (req, res) => {
+app.get('/api/school/users', async (req, res) => {
   const schoolId = Number(req.query.schoolId);
-  const users = getStoredUsers();
+  const users = await getStoredUsers();
 
   if (schoolId > 0) {
     const filtered = users.filter((u: any) => u.schoolId === schoolId);
@@ -1468,13 +1662,13 @@ app.get('/api/school/users', (req, res) => {
   return res.json({ success: true, users });
 });
 
-app.post('/api/school/approve-teacher', (req, res) => {
+app.post('/api/school/approve-teacher', async (req, res) => {
   const { schoolId, userId, action, role } = req.body || {};
-  const users = getStoredUsers();
+  const users = await getStoredUsers();
 
   if (action === 'reject') {
     const updatedUsers = users.filter((u: any) => u.id !== Number(userId));
-    saveStoredUsers(updatedUsers);
+    await saveStoredUsers(updatedUsers);
     return res.json({ success: true, message: 'ปฏิเสธและลบคำขอสมัครเรียบร้อยแล้ว' });
   }
 
@@ -1488,7 +1682,7 @@ app.post('/api/school/approve-teacher', (req, res) => {
     targetUser.role = role;
   }
   targetUser.approvedAt = new Date().toISOString();
-  saveStoredUsers(users);
+  await saveStoredUsers(users);
 
   return res.json({
     success: true,
@@ -1497,9 +1691,9 @@ app.post('/api/school/approve-teacher', (req, res) => {
   });
 });
 
-app.post('/api/school/update-teacher-role', (req, res) => {
+app.post('/api/school/update-teacher-role', async (req, res) => {
   const { schoolId, userId, role } = req.body || {};
-  const users = getStoredUsers();
+  const users = await getStoredUsers();
 
   const targetUser = users.find((u: any) => u.id === Number(userId) && u.schoolId === Number(schoolId));
   if (!targetUser) {
@@ -1509,7 +1703,7 @@ app.post('/api/school/update-teacher-role', (req, res) => {
   if (role && ['admin', 'director', 'teacher'].includes(role)) {
     targetUser.role = role;
   }
-  saveStoredUsers(users);
+  await saveStoredUsers(users);
 
   return res.json({
     success: true,

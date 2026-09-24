@@ -80,8 +80,9 @@ DROP TABLE IF EXISTS `users`;
 CREATE TABLE `users` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
-  `username` VARCHAR(50) NOT NULL COMMENT 'ชื่อผู้ใช้สำหรับเข้าสู่ระบบ',
-  `password_hash` VARCHAR(255) NOT NULL COMMENT 'รหัสผ่านแฮช (bcrypt / password_hash)',
+  `username` VARCHAR(100) NOT NULL COMMENT 'ชื่อผู้ใช้สำหรับเข้าสู่ระบบ (เช่น admin หรือ เลขบัตรประชาชน)',
+  `citizen_id` VARCHAR(20) DEFAULT NULL COMMENT 'เลขประจำตัวประชาชน 13 หลัก',
+  `password_hash` VARCHAR(255) NOT NULL COMMENT 'รหัสผ่านแฮช (bcrypt / password_hash) หรือ default plain text',
   `full_name` VARCHAR(150) NOT NULL COMMENT 'ชื่อ-นามสกุล',
   `email` VARCHAR(100) DEFAULT NULL COMMENT 'อีเมล',
   `role` ENUM('admin', 'director', 'teacher') NOT NULL DEFAULT 'teacher' COMMENT 'ระดับสิทธิ์: admin, director, teacher',
@@ -89,10 +90,15 @@ CREATE TABLE `users` (
   `position` VARCHAR(100) DEFAULT NULL COMMENT 'ตำแหน่งวิชาการ/วิทยฐานะ',
   `phone` VARCHAR(50) DEFAULT NULL COMMENT 'เบอร์โทรศัพท์',
   `avatar` VARCHAR(255) DEFAULT NULL,
+  `is_active` TINYINT(1) DEFAULT 1 COMMENT 'เปิด/ปิดการใช้งานบัญชี',
+  `is_password_changed` TINYINT(1) DEFAULT 0 COMMENT 'เปลี่ยนรหัสผ่านเริ่มต้นแล้วหรือไม่',
+  `status` VARCHAR(20) DEFAULT 'approved' COMMENT 'สถานะ: approved, pending, rejected',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `idx_user_login` (`username`),
+  KEY `idx_user_citizen` (`citizen_id`),
+  KEY `idx_user_school` (`school_id`),
   CONSTRAINT `fk_users_school` FOREIGN KEY (`school_id`) REFERENCES `schools` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางผู้ใช้งานและระดับสิทธิ์';
 
