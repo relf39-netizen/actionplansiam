@@ -733,7 +733,8 @@ const defaultSchools: any[] = [];
 // App Database Storage Endpoints
 app.get(['/api/database', '/api/app-data'], async (req, res) => {
   try {
-    const data = await loadAppData();
+    const schoolId = req.query.school_id ? Number(req.query.school_id) : undefined;
+    const data = await loadAppData(schoolId);
     return res.json({ success: true, data });
   } catch (e: any) {
     console.error('Error reading app database:', e);
@@ -743,9 +744,10 @@ app.get(['/api/database', '/api/app-data'], async (req, res) => {
 
 app.post(['/api/database', '/api/app-data'], async (req, res) => {
   try {
-    const ok = await saveAppData(req.body);
-    if (ok) {
-      return res.json({ success: true, message: 'บันทึกข้อมูลสำเร็จและซิงค์กับฐานข้อมูลเรียบร้อยแล้ว' });
+    const schoolId = req.query.school_id ? Number(req.query.school_id) : undefined;
+    const result = await saveAppData(req.body, schoolId);
+    if (result && result.success) {
+      return res.json({ success: true, message: result.message || 'บันทึกข้อมูลสำเร็จและซิงค์กับฐานข้อมูลเรียบร้อยแล้ว' });
     }
     return res.status(500).json({ success: false, message: 'ไม่สามารถบันทึกข้อมูลได้' });
   } catch (e: any) {
@@ -1102,14 +1104,31 @@ app.post('/api/super-admin/purge-demo', async (req, res) => {
 
   try {
     const conn = await getDirectConnection();
-    await conn.query("DELETE FROM `schools` WHERE `name` LIKE '%เด็กเรียนดี%' OR `smis_code` = '10000001'");
+    const [demoSchools]: any = await conn.query(
+      "SELECT id FROM `schools` WHERE `name` LIKE '%เด็กเรียนดี%' OR `smis_code` = '10000001' OR `school_code` = '1000000001'"
+    );
+    const demoIds = (demoSchools || []).map((s: any) => s.id);
+    if (demoIds.length > 0) {
+      const idList = demoIds.join(',');
+      await conn.query(`DELETE FROM budget_transactions WHERE school_id IN (${idList})`);
+      await conn.query(`DELETE FROM projects WHERE school_id IN (${idList})`);
+      await conn.query(`DELETE FROM budget_allocations WHERE school_id IN (${idList})`);
+      await conn.query(`DELETE FROM revenues WHERE school_id IN (${idList})`);
+      await conn.query(`DELETE FROM students WHERE school_id IN (${idList})`);
+      await conn.query(`DELETE FROM learner_activities WHERE school_id IN (${idList})`);
+      await conn.query(`DELETE FROM strategies WHERE school_id IN (${idList})`);
+      await conn.query(`DELETE FROM users WHERE school_id IN (${idList})`);
+      await conn.query(`DELETE FROM fiscal_years WHERE school_id IN (${idList})`);
+      await conn.query(`DELETE FROM schools WHERE id IN (${idList})`);
+    }
     await conn.end();
-  } catch (e) {}
+  } catch (e) {
+    console.warn('Error purging demo from MySQL:', e);
+  }
 
   if (!resetToDemo && schoolName) {
     const cleanSmis = (smisCode || '10000001').trim();
     const realSchool: any = {
-      id: 1,
       schoolCode: cleanSmis.length === 8 ? `${cleanSmis}00` : cleanSmis,
       smisCode: cleanSmis,
       isActive: true,
@@ -1129,26 +1148,42 @@ app.post('/api/super-admin/purge-demo', async (req, res) => {
       isRealSchool: true,
     };
 
+    let newSchoolId = 1;
     try {
       const conn = await getDirectConnection();
-      await conn.query(
+      const [insertRes]: any = await conn.query(
         `INSERT INTO \`schools\` (school_code, smis_code, is_active, school_key, admin_username, admin_password_plain, name, province, education_area, director_name, phone, email, notes)
          VALUES (?, ?, 1, ?, 'admin', '123456', ?, ?, ?, ?, '', '', 'โรงเรียนจริง')`,
         [realSchool.schoolCode, realSchool.smisCode, realSchool.schoolKey, realSchool.name, realSchool.province, realSchool.educationArea, realSchool.directorName]
       );
+      if (insertRes && insertRes.insertId) {
+        newSchoolId = insertRes.insertId;
+      }
+      realSchool.id = newSchoolId;
+
+      // Seed initial clean fiscal year for this school
+      await conn.query(
+        `INSERT INTO fiscal_years (school_id, year, is_active, start_date, end_date, total_students, teacher_count)
+         VALUES (?, 2568, 1, '2024-10-01', '2025-09-30', 0, 0)
+         ON DUPLICATE KEY UPDATE is_active = 1`,
+        [newSchoolId]
+      );
       await conn.end();
-    } catch (e) {}
+    } catch (e) {
+      console.error('Error inserting real school to MySQL:', e);
+    }
 
     saveStoredSchools([realSchool]);
 
-    // Clear demo data in database
+    // Clear and initialize clean data in database
     await saveAppData({
       school: realSchool,
       projects: [],
       transactions: [],
       allocations: [],
-      isRealMode: true,
-    });
+      students: [],
+      revenues: [],
+    }, newSchoolId);
 
     return res.json({
       success: true,
@@ -1158,12 +1193,6 @@ app.post('/api/super-admin/purge-demo', async (req, res) => {
   }
 
   saveStoredSchools([]);
-  await saveAppData({
-    projects: [],
-    transactions: [],
-    allocations: [],
-  });
-
   res.json({
     success: true,
     message: 'ล้างข้อมูลโรงเรียนเดิมและข้อมูล Demo เก่าทั้งหมดเรียบร้อยแล้ว ระบบสะอาดพร้อมใช้งานจริง',
@@ -1476,7 +1505,7 @@ app.post('/api/school/update-teacher-role', (req, res) => {
 });
 
 // Compatibility bridge for api/super_admin_api.php requests
-app.all(['/api/super_admin_api.php', '/super_admin_api.php'], (req, res) => {
+app.all(['/api/super_admin_api.php', '/super_admin_api.php'], async (req, res) => {
   const action = (req.query.action || req.body?.action || '').toString();
 
   switch (action) {
@@ -1650,30 +1679,38 @@ app.all(['/api/super_admin_api.php', '/super_admin_api.php'], (req, res) => {
     }
 
     case 'purge_all_demo': {
-      const defaultSchool = {
-        id: 1,
-        schoolCode: '1000000001',
-        smisCode: '10000001',
-        isActive: true,
-        schoolKey: 'SCH-10000001',
-        adminUsername: 'admin',
-        adminPasswordPlain: '123456',
-        name: 'โรงเรียนเด็กเรียนดี',
-        province: 'จังหวัดตัวอย่าง',
-        educationArea: 'สำนักงานเขตพื้นที่การศึกษาประถมศึกษาตัวอย่าง เขต 1',
-        directorName: 'นายตัวอย่าง ผู้นำการศึกษา (ผู้อำนวยการโรงเรียน)',
-        phone: '02-000-0000',
-        email: 'dekreeandee_school@obec.mail.go.th',
-        studentCount: 180,
-        projectCount: 1,
-        totalBudget: 746600,
-        notes: 'สถานศึกษาเริ่มต้น พร้อมสำหรับการใช้งานจริง',
-      };
-      saveStoredSchools([defaultSchool]);
+      try {
+        const conn = await getDirectConnection();
+        const [demoSchools]: any = await conn.query(
+          "SELECT id FROM `schools` WHERE `name` LIKE '%เด็กเรียนดี%' OR `smis_code` = '10000001' OR `school_code` = '1000000001'"
+        );
+        const demoIds = (demoSchools || []).map((s: any) => s.id);
+        if (demoIds.length > 0) {
+          const idList = demoIds.join(',');
+          await conn.query(`DELETE FROM budget_transactions WHERE school_id IN (${idList})`);
+          await conn.query(`DELETE FROM projects WHERE school_id IN (${idList})`);
+          await conn.query(`DELETE FROM budget_allocations WHERE school_id IN (${idList})`);
+          await conn.query(`DELETE FROM revenues WHERE school_id IN (${idList})`);
+          await conn.query(`DELETE FROM students WHERE school_id IN (${idList})`);
+          await conn.query(`DELETE FROM learner_activities WHERE school_id IN (${idList})`);
+          await conn.query(`DELETE FROM strategies WHERE school_id IN (${idList})`);
+          await conn.query(`DELETE FROM users WHERE school_id IN (${idList})`);
+          await conn.query(`DELETE FROM fiscal_years WHERE school_id IN (${idList})`);
+          await conn.query(`DELETE FROM schools WHERE id IN (${idList})`);
+        }
+        await conn.end();
+      } catch (e) {
+        console.warn('purge_all_demo MySQL error:', e);
+      }
+
+      let schools = getStoredSchools();
+      schools = schools.filter((s: any) => !s.name?.includes('เด็กเรียนดี') && s.smisCode !== '10000001');
+      saveStoredSchools(schools);
+
       return res.json({
         success: true,
-        message: 'ล้างข้อมูลโรงเรียนเดิมและข้อมูล Demo เก่าทั้งหมดเรียบร้อยแล้ว และตั้งค่า "โรงเรียนเด็กเรียนดี" เป็นโรงเรียนเริ่มต้น',
-        schools: [defaultSchool],
+        message: 'ล้างข้อมูลโรงเรียนเดิมและข้อมูล Demo เก่าทั้งหมดเรียบร้อยแล้ว ระบบสะอาดพร้อมใช้งานจริง',
+        schools,
       });
     }
 

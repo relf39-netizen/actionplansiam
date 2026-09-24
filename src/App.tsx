@@ -92,12 +92,14 @@ export default function App() {
           const schRes = await fetch('/api/super-admin/schools');
           if (schRes.ok) {
             const schJson = await schRes.json();
-            if (schJson.success && Array.isArray(schJson.schools) && schJson.schools.length > 0) {
+            if (schJson.success && Array.isArray(schJson.schools)) {
               setAllSchools(schJson.schools);
-              setSchool((prev) => {
-                const found = schJson.schools.find((s: School) => s.id === prev.id);
-                return found || schJson.schools[0];
-              });
+              if (schJson.schools.length > 0) {
+                setSchool((prev) => {
+                  const found = schJson.schools.find((s: School) => s.id === prev.id);
+                  return found || schJson.schools[0];
+                });
+              }
             }
           }
         } catch (e) {}
@@ -111,16 +113,20 @@ export default function App() {
             if (appJson.success && appJson.data) {
               const d = appJson.data;
               if (d.school) setSchool(d.school);
-              if (Array.isArray(d.fiscalYears) && d.fiscalYears.length > 0) setFiscalYears(d.fiscalYears);
+              if (Array.isArray(d.fiscalYears)) {
+                setFiscalYears(d.fiscalYears);
+                const active = d.fiscalYears.find((fy: FiscalYear) => fy.isActive) || d.fiscalYears[0];
+                if (active) setActiveFiscalYear(active);
+              }
               if (d.activeFiscalYear) setActiveFiscalYear(d.activeFiscalYear);
-              if (Array.isArray(d.users) && d.users.length > 0) setUsers(d.users);
-              if (Array.isArray(d.students) && d.students.length > 0) setStudents(d.students);
-              if (Array.isArray(d.revenues) && d.revenues.length > 0) setRevenues(d.revenues);
-              if (Array.isArray(d.allocations) && d.allocations.length > 0) setAllocations(d.allocations);
-              if (Array.isArray(d.activities) && d.activities.length > 0) setActivities(d.activities);
+              if (Array.isArray(d.users)) setUsers(d.users);
+              if (Array.isArray(d.students)) setStudents(d.students);
+              if (Array.isArray(d.revenues)) setRevenues(d.revenues);
+              if (Array.isArray(d.allocations)) setAllocations(d.allocations);
+              if (Array.isArray(d.activities)) setActivities(d.activities);
               if (Array.isArray(d.projects)) setProjects(d.projects);
               if (Array.isArray(d.transactions)) setTransactions(d.transactions);
-              if (Array.isArray(d.strategies) && d.strategies.length > 0) setStrategies(d.strategies);
+              if (Array.isArray(d.strategies)) setStrategies(d.strategies);
             }
           } catch (e) {}
         }
@@ -160,25 +166,22 @@ export default function App() {
         projects,
         transactions,
         strategies,
-        isRealMode,
         ...overrides,
       };
 
-      // Always backup school in localStorage
-      if (payload.school) {
-        localStorage.setItem('school_info', JSON.stringify(payload.school));
-      }
-      if (payload.isRealMode) {
-        localStorage.setItem('school_real_mode', 'true');
-      }
-
-      await fetch('/api/database', {
+      const targetSchoolId = payload.school?.id || 1;
+      const res = await fetch(`/api/database?school_id=${targetSchoolId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        console.error('Server failed to persist to MySQL:', errorData.message || res.statusText);
+      }
     } catch (err) {
-      console.warn('Failed to auto-save to database endpoint, data saved in local session:', err);
+      console.warn('Failed to save to database endpoint:', err);
     }
   };
 

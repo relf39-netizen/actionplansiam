@@ -438,31 +438,228 @@ function ensureAllAppTables($pdo) {
             `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
+
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `users` (
+            `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `school_id` INT UNSIGNED NOT NULL DEFAULT 1,
+            `username` VARCHAR(100) NOT NULL,
+            `citizen_id` VARCHAR(20) DEFAULT NULL,
+            `full_name` VARCHAR(150) NOT NULL,
+            `email` VARCHAR(150) DEFAULT NULL,
+            `role` VARCHAR(50) NOT NULL DEFAULT 'teacher',
+            `department` VARCHAR(100) DEFAULT NULL,
+            `position` VARCHAR(150) DEFAULT NULL,
+            `phone` VARCHAR(50) DEFAULT NULL,
+            `is_active` TINYINT(1) DEFAULT 1,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
+
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `learner_activities` (
+            `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `school_id` INT UNSIGNED NOT NULL DEFAULT 1,
+            `fiscal_year_id` INT UNSIGNED NOT NULL DEFAULT 1,
+            `activity_name` VARCHAR(255) NOT NULL,
+            `percentage` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+            `allocated_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            `spent_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            `remaining_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+            `note` TEXT DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
+
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `strategies` (
+            `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `school_id` INT UNSIGNED NOT NULL DEFAULT 1,
+            `fiscal_year_id` INT UNSIGNED NOT NULL DEFAULT 1,
+            `code` VARCHAR(50) NOT NULL,
+            `name` VARCHAR(255) NOT NULL,
+            `description` TEXT DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
     } catch (Exception $e) {
         error_log("Failed to ensure app tables: " . $e->getMessage());
     }
 }
 
-function syncAppDataToMySQL($pdo, $data) {
+function syncAppDataToMySQL($pdo, $data, $schoolIdParam = 0) {
     if (!$pdo) return;
     ensureAllAppTables($pdo);
+
+    $schoolId = intval($schoolIdParam > 0 ? $schoolIdParam : ($data['school']['id'] ?? 1));
 
     // 1. Sync school
     if (!empty($data['school']) && is_array($data['school'])) {
         insertSchoolToDatabase($data['school']);
+        if (!empty($data['school']['id'])) {
+            $schoolId = intval($data['school']['id']);
+        }
     }
 
-    $schoolId = intval($data['school']['id'] ?? 1);
     if ($schoolId <= 0) $schoolId = 1;
 
-    // 2. Sync projects
-    if (!empty($data['projects']) && is_array($data['projects'])) {
-        try {
+    // 2. Sync students
+    if (isset($data['students']) && is_array($data['students'])) {
+        if (count($data['students']) === 0) {
+            $pdo->prepare("DELETE FROM `students` WHERE `school_id` = ?")->execute([$schoolId]);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO `students` (`id`, `school_id`, `fiscal_year_id`, `grade_level`, `stage`, `male_count`, `female_count`, `total_count`)
+                VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  grade_level = VALUES(grade_level),
+                  stage = VALUES(stage),
+                  male_count = VALUES(male_count),
+                  female_count = VALUES(female_count),
+                  total_count = VALUES(total_count)");
+            foreach ($data['students'] as $s) {
+                if (empty($s['gradeLevel'])) continue;
+                $stmt->execute([
+                    intval($s['id'] ?? 0),
+                    $schoolId,
+                    $s['gradeLevel'],
+                    $s['stage'] ?? 'ประถม',
+                    intval($s['maleCount'] ?? 0),
+                    intval($s['femaleCount'] ?? 0),
+                    intval($s['totalCount'] ?? 0),
+                ]);
+            }
+        }
+    }
+
+    // 3. Sync revenues
+    if (isset($data['revenues']) && is_array($data['revenues'])) {
+        if (count($data['revenues']) === 0) {
+            $pdo->prepare("DELETE FROM `revenues` WHERE `school_id` = ?")->execute([$schoolId]);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO `revenues` (`id`, `school_id`, `fiscal_year_id`, `category`, `item_name`, `rate_per_head`, `eligible_count`, `calculated_amount`, `is_custom_rate`, `note`)
+                VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  category = VALUES(category),
+                  item_name = VALUES(item_name),
+                  rate_per_head = VALUES(rate_per_head),
+                  eligible_count = VALUES(eligible_count),
+                  calculated_amount = VALUES(calculated_amount),
+                  is_custom_rate = VALUES(is_custom_rate),
+                  note = VALUES(note)");
+            foreach ($data['revenues'] as $r) {
+                if (empty($r['itemName'])) continue;
+                $stmt->execute([
+                    intval($r['id'] ?? 0),
+                    $schoolId,
+                    $r['category'] ?? 'subsidy',
+                    $r['itemName'],
+                    floatval($r['ratePerHead'] ?? 0),
+                    intval($r['eligibleCount'] ?? 0),
+                    floatval($r['calculatedAmount'] ?? 0),
+                    !empty($r['isCustomRate']) ? 1 : 0,
+                    $r['note'] ?? '',
+                ]);
+            }
+        }
+    }
+
+    // 4. Sync budget_allocations
+    if (isset($data['allocations']) && is_array($data['allocations'])) {
+        if (count($data['allocations']) === 0) {
+            $pdo->prepare("DELETE FROM `budget_allocations` WHERE `school_id` = ?")->execute([$schoolId]);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO `budget_allocations` (`id`, `school_id`, `fiscal_year_id`, `department_name`, `percentage`, `allocated_amount`, `spent_amount`, `remaining_amount`, `color_hex`, `description`)
+                VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  department_name = VALUES(department_name),
+                  percentage = VALUES(percentage),
+                  allocated_amount = VALUES(allocated_amount),
+                  spent_amount = VALUES(spent_amount),
+                  remaining_amount = VALUES(remaining_amount),
+                  color_hex = VALUES(color_hex),
+                  description = VALUES(description)");
+            foreach ($data['allocations'] as $a) {
+                if (empty($a['departmentName'])) continue;
+                $stmt->execute([
+                    intval($a['id'] ?? 0),
+                    $schoolId,
+                    $a['departmentName'],
+                    floatval($a['percentage'] ?? 0),
+                    floatval($a['allocatedAmount'] ?? 0),
+                    floatval($a['spentAmount'] ?? 0),
+                    floatval($a['remainingAmount'] ?? 0),
+                    $a['colorHex'] ?? '#2563eb',
+                    $a['description'] ?? '',
+                ]);
+            }
+        }
+    }
+
+    // 5. Sync learner_activities
+    if (isset($data['activities']) && is_array($data['activities'])) {
+        if (count($data['activities']) === 0) {
+            $pdo->prepare("DELETE FROM `learner_activities` WHERE `school_id` = ?")->execute([$schoolId]);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO `learner_activities` (`id`, `school_id`, `fiscal_year_id`, `activity_name`, `percentage`, `allocated_amount`, `spent_amount`, `remaining_amount`, `note`)
+                VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  activity_name = VALUES(activity_name),
+                  percentage = VALUES(percentage),
+                  allocated_amount = VALUES(allocated_amount),
+                  spent_amount = VALUES(spent_amount),
+                  remaining_amount = VALUES(remaining_amount),
+                  note = VALUES(note)");
+            foreach ($data['activities'] as $act) {
+                if (empty($act['activityName'])) continue;
+                $stmt->execute([
+                    intval($act['id'] ?? 0),
+                    $schoolId,
+                    $act['activityName'],
+                    floatval($act['percentage'] ?? 0),
+                    floatval($act['allocatedAmount'] ?? 0),
+                    floatval($act['spentAmount'] ?? 0),
+                    floatval($act['remainingAmount'] ?? 0),
+                    $act['note'] ?? '',
+                ]);
+            }
+        }
+    }
+
+    // 6. Sync strategies
+    if (isset($data['strategies']) && is_array($data['strategies'])) {
+        if (count($data['strategies']) === 0) {
+            $pdo->prepare("DELETE FROM `strategies` WHERE `school_id` = ?")->execute([$schoolId]);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO `strategies` (`id`, `school_id`, `fiscal_year_id`, `code`, `name`, `description`)
+                VALUES (?, ?, 1, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  code = VALUES(code),
+                  name = VALUES(name),
+                  description = VALUES(description)");
+            foreach ($data['strategies'] as $st) {
+                if (empty($st['name'])) continue;
+                $stmt->execute([
+                    intval($st['id'] ?? 0),
+                    $schoolId,
+                    $st['code'] ?? '',
+                    $st['name'],
+                    $st['description'] ?? '',
+                ]);
+            }
+        }
+    }
+
+    // 7. Sync projects
+    if (isset($data['projects']) && is_array($data['projects'])) {
+        if (count($data['projects']) === 0) {
+            $pdo->prepare("DELETE FROM `projects` WHERE `school_id` = ?")->execute([$schoolId]);
+        } else {
             $stmt = $pdo->prepare("INSERT INTO `projects` 
                 (`id`, `school_id`, `fiscal_year_id`, `project_code`, `project_name`, `rationale`, `objectives`, `quantitative_goals`, `qualitative_goals`, `kpis`, `procedures`, `duration_start`, `duration_end`, `location`, `target_group`, `responsible_person`, `department`, `budget_source`, `allocated_budget`, `spent_budget`, `remaining_budget`, `status`, `approval_status`)
                 VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
                   project_name = VALUES(project_name),
+                  project_code = VALUES(project_code),
                   rationale = VALUES(rationale),
                   objectives = VALUES(objectives),
                   quantitative_goals = VALUES(quantitative_goals),
@@ -483,15 +680,15 @@ function syncAppDataToMySQL($pdo, $data) {
                   approval_status = VALUES(approval_status)");
 
             foreach ($data['projects'] as $p) {
-                if (empty($p['id']) || empty($p['projectName'])) continue;
+                if (empty($p['projectName'])) continue;
                 $allocated = floatval($p['allocatedBudget'] ?? 0);
                 $spent = floatval($p['spentBudget'] ?? 0);
                 $remaining = floatval($p['remainingBudget'] ?? ($allocated - $spent));
 
                 $stmt->execute([
-                    intval($p['id']),
+                    intval($p['id'] ?? 0),
                     $schoolId,
-                    $p['projectCode'] ?? ('PROJ-' . $p['id']),
+                    $p['projectCode'] ?? ('PROJ-' . ($p['id'] ?? time())),
                     $p['projectName'],
                     $p['rationale'] ?? '',
                     $p['objectives'] ?? '',
@@ -513,82 +710,14 @@ function syncAppDataToMySQL($pdo, $data) {
                     $p['approvalStatus'] ?? 'approved',
                 ]);
             }
-        } catch (Exception $e) {
-            error_log("Failed to sync projects: " . $e->getMessage());
         }
     }
 
-    // 3. Sync revenues
-    if (!empty($data['revenues']) && is_array($data['revenues'])) {
-        try {
-            $stmt = $pdo->prepare("INSERT INTO `revenues`
-                (`id`, `school_id`, `fiscal_year_id`, `category`, `item_name`, `rate_per_head`, `eligible_count`, `calculated_amount`, `is_custom_rate`, `note`)
-                VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                  category = VALUES(category),
-                  item_name = VALUES(item_name),
-                  rate_per_head = VALUES(rate_per_head),
-                  eligible_count = VALUES(eligible_count),
-                  calculated_amount = VALUES(calculated_amount),
-                  is_custom_rate = VALUES(is_custom_rate),
-                  note = VALUES(note)");
-
-            foreach ($data['revenues'] as $r) {
-                if (empty($r['id']) || empty($r['itemName'])) continue;
-                $stmt->execute([
-                    intval($r['id']),
-                    $schoolId,
-                    $r['category'] ?? 'subsidy',
-                    $r['itemName'],
-                    floatval($r['ratePerHead'] ?? 0),
-                    intval($r['eligibleCount'] ?? 0),
-                    floatval($r['calculatedAmount'] ?? 0),
-                    !empty($r['isCustomRate']) ? 1 : 0,
-                    $r['note'] ?? '',
-                ]);
-            }
-        } catch (Exception $e) {
-            error_log("Failed to sync revenues: " . $e->getMessage());
-        }
-    }
-
-    // 4. Sync budget_allocations
-    if (!empty($data['allocations']) && is_array($data['allocations'])) {
-        try {
-            $stmt = $pdo->prepare("INSERT INTO `budget_allocations`
-                (`id`, `school_id`, `fiscal_year_id`, `department_name`, `percentage`, `allocated_amount`, `spent_amount`, `remaining_amount`, `color_hex`, `description`)
-                VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                  department_name = VALUES(department_name),
-                  percentage = VALUES(percentage),
-                  allocated_amount = VALUES(allocated_amount),
-                  spent_amount = VALUES(spent_amount),
-                  remaining_amount = VALUES(remaining_amount),
-                  color_hex = VALUES(color_hex),
-                  description = VALUES(description)");
-
-            foreach ($data['allocations'] as $a) {
-                if (empty($a['id']) || empty($a['departmentName'])) continue;
-                $stmt->execute([
-                    intval($a['id']),
-                    $schoolId,
-                    $a['departmentName'],
-                    floatval($a['percentage'] ?? 0),
-                    floatval($a['allocatedAmount'] ?? 0),
-                    floatval($a['spentAmount'] ?? 0),
-                    floatval($a['remainingAmount'] ?? 0),
-                    $a['colorHex'] ?? '#2563eb',
-                    $a['description'] ?? '',
-                ]);
-            }
-        } catch (Exception $e) {
-            error_log("Failed to sync allocations: " . $e->getMessage());
-        }
-    }
-
-    // 5. Sync budget_transactions
-    if (!empty($data['transactions']) && is_array($data['transactions'])) {
-        try {
+    // 8. Sync budget_transactions
+    if (isset($data['transactions']) && is_array($data['transactions'])) {
+        if (count($data['transactions']) === 0) {
+            $pdo->prepare("DELETE FROM `budget_transactions` WHERE `school_id` = ?")->execute([$schoolId]);
+        } else {
             $stmt = $pdo->prepare("INSERT INTO `budget_transactions`
                 (`id`, `school_id`, `fiscal_year_id`, `project_id`, `doc_number`, `transaction_date`, `item_description`, `amount`, `payee`, `receipt_number`, `approved_by`, `status`)
                 VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -604,12 +733,12 @@ function syncAppDataToMySQL($pdo, $data) {
                   status = VALUES(status)");
 
             foreach ($data['transactions'] as $t) {
-                if (empty($t['id']) || empty($t['itemDescription'])) continue;
+                if (empty($t['itemDescription'])) continue;
                 $stmt->execute([
-                    intval($t['id']),
+                    intval($t['id'] ?? 0),
                     $schoolId,
                     intval($t['projectId'] ?? 0),
-                    $t['docNumber'] ?? ('DOC-' . $t['id']),
+                    $t['docNumber'] ?? ('DOC-' . ($t['id'] ?? time())),
                     $t['transactionDate'] ?? date('Y-m-d'),
                     $t['itemDescription'],
                     floatval($t['amount'] ?? 0),
@@ -619,79 +748,144 @@ function syncAppDataToMySQL($pdo, $data) {
                     $t['status'] ?? 'approved',
                 ]);
             }
-        } catch (Exception $e) {
-            error_log("Failed to sync transactions: " . $e->getMessage());
         }
     }
 }
 
-function loadAppDataFromMySQL($pdo) {
+function loadAppDataFromMySQL($pdo, $schoolIdParam = 0) {
     if (!$pdo) return null;
     ensureAllAppTables($pdo);
     try {
         $result = [];
 
         // 1. School
-        $stmt = $pdo->query("SELECT id, school_code as schoolCode, smis_code as smisCode, is_active as isActive, school_key as schoolKey, admin_username as adminUsername, name, province, education_area as educationArea, director_name as directorName, phone, email, student_count as studentCount, project_count as projectCount, total_budget as totalBudget, notes FROM `schools` WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
-        $school = $stmt->fetch(PDO::FETCH_ASSOC);
+        $schoolId = intval($schoolIdParam);
+        if ($schoolId > 0) {
+            $stmt = $pdo->prepare("SELECT id, school_code as schoolCode, smis_code as smisCode, is_active as isActive, school_key as schoolKey, admin_username as adminUsername, name, province, education_area as educationArea, director_name as directorName, phone, email, student_count as studentCount, project_count as projectCount, total_budget as totalBudget, notes FROM `schools` WHERE id = ? LIMIT 1");
+            $stmt->execute([$schoolId]);
+            $school = $stmt->fetch(PDO::FETCH_ASSOC);
+        } else {
+            $stmt = $pdo->query("SELECT id, school_code as schoolCode, smis_code as smisCode, is_active as isActive, school_key as schoolKey, admin_username as adminUsername, name, province, education_area as educationArea, director_name as directorName, phone, email, student_count as studentCount, project_count as projectCount, total_budget as totalBudget, notes FROM `schools` WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+            $school = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+
         if ($school) {
             $school['id'] = intval($school['id']);
             $school['isActive'] = true;
             $result['school'] = $school;
+            $schoolId = $school['id'];
+        } else {
+            $schoolId = 1;
         }
 
-        // 2. Projects
-        $stmt = $pdo->query("SELECT id, project_code as projectCode, project_name as projectName, rationale, objectives, quantitative_goals as quantitativeGoals, qualitative_goals as qualitativeGoals, kpis, procedures, duration_start as durationStart, duration_end as durationEnd, location, target_group as targetGroup, responsible_person as responsiblePerson, department, budget_source as budgetSource, allocated_budget as allocatedBudget, spent_budget as spentBudget, remaining_budget as remainingBudget, status, approval_status as approvalStatus FROM `projects` ORDER BY id ASC");
-        $projects = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if ($projects && count($projects) > 0) {
-            $result['projects'] = array_map(function($p) {
-                $p['id'] = intval($p['id']);
-                $p['allocatedBudget'] = floatval($p['allocatedBudget']);
-                $p['spentBudget'] = floatval($p['spentBudget']);
-                $p['remainingBudget'] = floatval($p['remainingBudget']);
-                return $p;
-            }, $projects);
-        }
+        // 2. Fiscal Years
+        $stmt = $pdo->prepare("SELECT id, school_id as schoolId, year, is_active as isActive, start_date as startDate, end_date as endDate, total_students as totalStudents, teacher_count as teacherCount FROM `fiscal_years` WHERE school_id = ? ORDER BY year DESC");
+        $stmt->execute([$schoolId]);
+        $fiscalYears = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $result['fiscalYears'] = array_map(function($fy) {
+            $fy['id'] = intval($fy['id']);
+            $fy['schoolId'] = intval($fy['schoolId']);
+            $fy['year'] = intval($fy['year']);
+            $fy['isActive'] = ($fy['isActive'] == 1);
+            $fy['totalStudents'] = intval($fy['totalStudents']);
+            $fy['teacherCount'] = intval($fy['teacherCount']);
+            return $fy;
+        }, $fiscalYears ?: []);
 
-        // 3. Revenues
-        $stmt = $pdo->query("SELECT id, category, item_name as itemName, rate_per_head as ratePerHead, eligible_count as eligibleCount, calculated_amount as calculatedAmount, is_custom_rate as isCustomRate, note FROM `revenues` ORDER BY id ASC");
+        // 3. Users
+        $stmt = $pdo->prepare("SELECT id, school_id as schoolId, username, citizen_id as citizenId, full_name as fullName, email, role, department, position, phone, is_active as isActive FROM `users` WHERE school_id = ? ORDER BY id ASC");
+        $stmt->execute([$schoolId]);
+        $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $result['users'] = array_map(function($u) {
+            $u['id'] = intval($u['id']);
+            $u['schoolId'] = intval($u['schoolId']);
+            $u['isActive'] = ($u['isActive'] == 1);
+            return $u;
+        }, $users ?: []);
+
+        // 4. Students
+        $stmt = $pdo->prepare("SELECT id, school_id as schoolId, fiscal_year_id as fiscalYearId, grade_level as gradeLevel, stage, male_count as maleCount, female_count as femaleCount, total_count as totalCount FROM `students` WHERE school_id = ? ORDER BY id ASC");
+        $stmt->execute([$schoolId]);
+        $students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $result['students'] = array_map(function($st) {
+            $st['id'] = intval($st['id']);
+            $st['schoolId'] = intval($st['schoolId']);
+            $st['maleCount'] = intval($st['maleCount']);
+            $st['femaleCount'] = intval($st['femaleCount']);
+            $st['totalCount'] = intval($st['totalCount']);
+            return $st;
+        }, $students ?: []);
+
+        // 5. Revenues
+        $stmt = $pdo->prepare("SELECT id, category, item_name as itemName, rate_per_head as ratePerHead, eligible_count as eligibleCount, calculated_amount as calculatedAmount, is_custom_rate as isCustomRate, note FROM `revenues` WHERE school_id = ? ORDER BY id ASC");
+        $stmt->execute([$schoolId]);
         $revenues = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if ($revenues && count($revenues) > 0) {
-            $result['revenues'] = array_map(function($r) {
-                $r['id'] = intval($r['id']);
-                $r['ratePerHead'] = floatval($r['ratePerHead']);
-                $r['eligibleCount'] = intval($r['eligibleCount']);
-                $r['calculatedAmount'] = floatval($r['calculatedAmount']);
-                $r['isCustomRate'] = ($r['isCustomRate'] == 1);
-                return $r;
-            }, $revenues);
-        }
+        $result['revenues'] = array_map(function($r) {
+            $r['id'] = intval($r['id']);
+            $r['ratePerHead'] = floatval($r['ratePerHead']);
+            $r['eligibleCount'] = intval($r['eligibleCount']);
+            $r['calculatedAmount'] = floatval($r['calculatedAmount']);
+            $r['isCustomRate'] = ($r['isCustomRate'] == 1);
+            return $r;
+        }, $revenues ?: []);
 
-        // 4. Budget Allocations
-        $stmt = $pdo->query("SELECT id, department_name as departmentName, percentage, allocated_amount as allocatedAmount, spent_amount as spentAmount, remaining_amount as remainingAmount, color_hex as colorHex, description FROM `budget_allocations` ORDER BY id ASC");
+        // 6. Budget Allocations
+        $stmt = $pdo->prepare("SELECT id, department_name as departmentName, percentage, allocated_amount as allocatedAmount, spent_amount as spentAmount, remaining_amount as remainingAmount, color_hex as colorHex, description FROM `budget_allocations` WHERE school_id = ? ORDER BY id ASC");
+        $stmt->execute([$schoolId]);
         $allocations = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if ($allocations && count($allocations) > 0) {
-            $result['allocations'] = array_map(function($a) {
-                $a['id'] = intval($a['id']);
-                $a['percentage'] = floatval($a['percentage']);
-                $a['allocatedAmount'] = floatval($a['allocatedAmount']);
-                $a['spentAmount'] = floatval($a['spentAmount']);
-                $a['remainingAmount'] = floatval($a['remainingAmount']);
-                return $a;
-            }, $allocations);
-        }
+        $result['allocations'] = array_map(function($a) {
+            $a['id'] = intval($a['id']);
+            $a['percentage'] = floatval($a['percentage']);
+            $a['allocatedAmount'] = floatval($a['allocatedAmount']);
+            $a['spentAmount'] = floatval($a['spentAmount']);
+            $a['remainingAmount'] = floatval($a['remainingAmount']);
+            return $a;
+        }, $allocations ?: []);
 
-        // 5. Budget Transactions
-        $stmt = $pdo->query("SELECT id, project_id as projectId, doc_number as docNumber, transaction_date as transactionDate, item_description as itemDescription, amount, payee, receipt_number as receiptNumber, approved_by as approvedBy, status FROM `budget_transactions` ORDER BY id DESC");
+        // 7. Learner Activities
+        $stmt = $pdo->prepare("SELECT id, activity_name as activityName, percentage, allocated_amount as allocatedAmount, spent_amount as spentAmount, remaining_amount as remainingAmount, note FROM `learner_activities` WHERE school_id = ? ORDER BY id ASC");
+        $stmt->execute([$schoolId]);
+        $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $result['activities'] = array_map(function($act) {
+            $act['id'] = intval($act['id']);
+            $act['percentage'] = floatval($act['percentage']);
+            $act['allocatedAmount'] = floatval($act['allocatedAmount']);
+            $act['spentAmount'] = floatval($act['spentAmount']);
+            $act['remainingAmount'] = floatval($act['remainingAmount']);
+            return $act;
+        }, $activities ?: []);
+
+        // 8. Strategies
+        $stmt = $pdo->prepare("SELECT id, code, name, description FROM `strategies` WHERE school_id = ? ORDER BY id ASC");
+        $stmt->execute([$schoolId]);
+        $strategies = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $result['strategies'] = array_map(function($str) {
+            $str['id'] = intval($str['id']);
+            return $str;
+        }, $strategies ?: []);
+
+        // 9. Projects
+        $stmt = $pdo->prepare("SELECT id, project_code as projectCode, project_name as projectName, rationale, objectives, quantitative_goals as quantitativeGoals, qualitative_goals as qualitativeGoals, kpis, procedures, duration_start as durationStart, duration_end as durationEnd, location, target_group as targetGroup, responsible_person as responsiblePerson, department, budget_source as budgetSource, allocated_budget as allocatedBudget, spent_budget as spentBudget, remaining_budget as remainingBudget, status, approval_status as approvalStatus FROM `projects` WHERE school_id = ? ORDER BY id ASC");
+        $stmt->execute([$schoolId]);
+        $projects = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $result['projects'] = array_map(function($p) {
+            $p['id'] = intval($p['id']);
+            $p['allocatedBudget'] = floatval($p['allocatedBudget']);
+            $p['spentBudget'] = floatval($p['spentBudget']);
+            $p['remainingBudget'] = floatval($p['remainingBudget']);
+            return $p;
+        }, $projects ?: []);
+
+        // 10. Budget Transactions
+        $stmt = $pdo->prepare("SELECT id, project_id as projectId, doc_number as docNumber, transaction_date as transactionDate, item_description as itemDescription, amount, payee, receipt_number as receiptNumber, approved_by as approvedBy, status FROM `budget_transactions` WHERE school_id = ? ORDER BY id DESC");
+        $stmt->execute([$schoolId]);
         $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if ($transactions && count($transactions) > 0) {
-            $result['transactions'] = array_map(function($t) {
-                $t['id'] = intval($t['id']);
-                $t['projectId'] = intval($t['projectId']);
-                $t['amount'] = floatval($t['amount']);
-                return $t;
-            }, $transactions);
-        }
+        $result['transactions'] = array_map(function($t) {
+            $t['id'] = intval($t['id']);
+            $t['projectId'] = intval($t['projectId']);
+            $t['amount'] = floatval($t['amount']);
+            return $t;
+        }, $transactions ?: []);
 
         return $result;
     } catch (Exception $e) {
@@ -1697,7 +1891,20 @@ try {
             }
             try {
                 ensureSchoolsTable($pdo);
-                $pdo->exec("DELETE FROM `schools` WHERE `name` LIKE '%เด็กเรียนดี%' OR `smis_code` = '10000001'");
+                $demoSchools = $pdo->query("SELECT id FROM `schools` WHERE `name` LIKE '%เด็กเรียนดี%' OR `smis_code` = '10000001' OR `school_code` = '1000000001'")->fetchAll(PDO::FETCH_COLUMN);
+                if (!empty($demoSchools)) {
+                    $idList = implode(',', array_map('intval', $demoSchools));
+                    $pdo->exec("DELETE FROM `budget_transactions` WHERE `school_id` IN ($idList)");
+                    $pdo->exec("DELETE FROM `projects` WHERE `school_id` IN ($idList)");
+                    $pdo->exec("DELETE FROM `budget_allocations` WHERE `school_id` IN ($idList)");
+                    $pdo->exec("DELETE FROM `revenues` WHERE `school_id` IN ($idList)");
+                    $pdo->exec("DELETE FROM `students` WHERE `school_id` IN ($idList)");
+                    $pdo->exec("DELETE FROM `learner_activities` WHERE `school_id` IN ($idList)");
+                    $pdo->exec("DELETE FROM `strategies` WHERE `school_id` IN ($idList)");
+                    $pdo->exec("DELETE FROM `users` WHERE `school_id` IN ($idList)");
+                    $pdo->exec("DELETE FROM `fiscal_years` WHERE `school_id` IN ($idList)");
+                    $pdo->exec("DELETE FROM `schools` WHERE `id` IN ($idList)");
+                }
 
                 if (!empty($schoolName)) {
                     $smisCode = trim($input['smisCode'] ?? '10000001');
@@ -1744,6 +1951,7 @@ try {
         case 'app-data': {
             $pdo = getDbPDO();
             global $lastDbError;
+            $schoolIdParam = intval($_GET['school_id'] ?? ($input['school']['id'] ?? 0));
 
             if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$pdo) {
@@ -1756,7 +1964,7 @@ try {
                     exit;
                 }
                 try {
-                    syncAppDataToMySQL($pdo, $input);
+                    syncAppDataToMySQL($pdo, $input, $schoolIdParam);
                     echo json_encode([
                         'success' => true,
                         'message' => 'บันทึกข้อมูลลงในฐานข้อมูล MySQL สำเร็จสมบูรณ์',
@@ -1784,7 +1992,7 @@ try {
             }
 
             try {
-                $dbData = loadAppDataFromMySQL($pdo);
+                $dbData = loadAppDataFromMySQL($pdo, $schoolIdParam);
                 echo json_encode([
                     'success' => true,
                     'data' => $dbData,

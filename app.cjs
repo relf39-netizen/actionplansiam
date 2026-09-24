@@ -1,25 +1,19 @@
 /**
  * Application Startup File for cPanel (Setup Node.js App / Phusion Passenger)
- * ไฟล์เริ่มต้นการทำงานสำหรับ cPanel Node.js Selector (ES Module Compatible)
+ * CommonJS Version (.cjs)
  */
 
-import fs from 'node:fs';
-import path from 'node:path';
-import http from 'node:http';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// บังคับให้เป็นโหมด Production เสมอสำหรับ cPanel เพื่อให้โหลดไฟล์คอมไพล์สำเร็จรูป (dist)
 process.env.NODE_ENV = 'production';
+
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
 
 const distDir = path.join(__dirname, 'dist');
 const prodDistDir = path.join(__dirname, 'prod_dist');
 const distServer = path.join(distDir, 'server.cjs');
 const prodDistServer = path.join(prodDistDir, 'server.cjs');
 
-// ฟังก์ชันคัดลอกไฟล์และโฟลเดอร์แบบ Recursive
 function copyFolderRecursiveSync(source, target) {
   if (!fs.existsSync(target)) {
     fs.mkdirSync(target, { recursive: true });
@@ -38,7 +32,6 @@ function copyFolderRecursiveSync(source, target) {
   }
 }
 
-// ตรวจสอบและซิงค์ prod_dist ไปยัง dist เสมอเมื่อมีไฟล์ใหม่
 if (fs.existsSync(prodDistServer)) {
   const needsSync = !fs.existsSync(distServer) || fs.statSync(prodDistServer).size !== fs.statSync(distServer).size;
   if (needsSync) {
@@ -51,7 +44,6 @@ if (fs.existsSync(prodDistServer)) {
   }
 }
 
-// สร้างโฟลเดอร์ tmp สำหรับ Passenger
 try {
   const tmpDir = path.join(__dirname, 'tmp');
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
@@ -63,11 +55,10 @@ const targetServer = fs.existsSync(distServer) ? distServer : (fs.existsSync(pro
 if (targetServer) {
   try {
     console.log(`🚀 กำลังเริ่มระบบ Production Server จาก: ${targetServer}`);
-    // Dynamic import to support both CJS and ESM in Node.js
-    await import(pathToFileURL(targetServer).href);
+    require(targetServer);
     serverLoaded = true;
   } catch (err) {
-    console.error("❌ เกิดข้อผิดพลาดในการโหลด Server:", err);
+    console.error("❌ เกิดข้อผิดพลาดในการโหลด Server CJS:", err);
   }
 }
 

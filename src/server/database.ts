@@ -386,121 +386,185 @@ export async function runDatabaseMigration(): Promise<{
 }
 
 /**
- * บันทึก App Data ลง Persistent Storage (ทั้ง MySQL จริง และ Disk Backup)
+ * บันทึก App Data ลง MySQL จริงแบบครอบคลุมทุกตาราง พร้อมจำกัดสิทธิ์ school_id
  */
-export async function saveAppData(data: any): Promise<boolean> {
+export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ success: boolean; message: string; error?: string }> {
   try {
-    // 1. บันทึกลง Disk File ก่อนเสมอ
-    const dir = path.dirname(APP_DB_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(APP_DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    const conn = await getDirectConnection();
 
-    // 2. ถ้า MySQL ต่อได้ ให้ sync ข้อมูลทั้งหมดลงตาราง MySQL จริง
-    try {
-      const conn = await getDirectConnection();
+    // Ensure all tables exist
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`schools\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_code\` VARCHAR(50) NOT NULL,
+      \`smis_code\` VARCHAR(20) NOT NULL,
+      \`is_active\` TINYINT(1) NOT NULL DEFAULT 1,
+      \`school_key\` VARCHAR(50) NOT NULL,
+      \`admin_username\` VARCHAR(50) NOT NULL DEFAULT 'admin',
+      \`admin_password_plain\` VARCHAR(100) DEFAULT '123456',
+      \`name\` VARCHAR(255) NOT NULL,
+      \`province\` VARCHAR(100) DEFAULT NULL,
+      \`education_area\` VARCHAR(255) DEFAULT NULL,
+      \`director_name\` VARCHAR(150) DEFAULT NULL,
+      \`phone\` VARCHAR(50) DEFAULT NULL,
+      \`email\` VARCHAR(100) DEFAULT NULL,
+      \`student_count\` INT UNSIGNED DEFAULT 0,
+      \`project_count\` INT UNSIGNED DEFAULT 0,
+      \`total_budget\` DECIMAL(15,2) DEFAULT 0,
+      \`notes\` TEXT DEFAULT NULL,
+      \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (\`id\`),
+      UNIQUE KEY \`uniq_smis\` (\`smis_code\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
 
-      // Ensure tables exist
-      await conn.query(`CREATE TABLE IF NOT EXISTS \`schools\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`school_code\` VARCHAR(50) NOT NULL,
-        \`smis_code\` VARCHAR(20) NOT NULL,
-        \`is_active\` TINYINT(1) NOT NULL DEFAULT 1,
-        \`school_key\` VARCHAR(50) NOT NULL,
-        \`admin_username\` VARCHAR(50) NOT NULL DEFAULT 'admin',
-        \`admin_password_plain\` VARCHAR(100) DEFAULT '123456',
-        \`name\` VARCHAR(255) NOT NULL,
-        \`province\` VARCHAR(100) DEFAULT NULL,
-        \`education_area\` VARCHAR(255) DEFAULT NULL,
-        \`director_name\` VARCHAR(150) DEFAULT NULL,
-        \`phone\` VARCHAR(50) DEFAULT NULL,
-        \`email\` VARCHAR(100) DEFAULT NULL,
-        \`student_count\` INT UNSIGNED DEFAULT 0,
-        \`project_count\` INT UNSIGNED DEFAULT 0,
-        \`total_budget\` DECIMAL(15,2) DEFAULT 0,
-        \`notes\` TEXT DEFAULT NULL,
-        \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (\`id\`),
-        UNIQUE KEY \`uniq_smis\` (\`smis_code\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`fiscal_years\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_id\` INT UNSIGNED NOT NULL,
+      \`year\` INT UNSIGNED NOT NULL,
+      \`is_active\` TINYINT(1) DEFAULT 1,
+      \`start_date\` DATE DEFAULT NULL,
+      \`end_date\` DATE DEFAULT NULL,
+      \`total_students\` INT UNSIGNED DEFAULT 0,
+      \`teacher_count\` INT UNSIGNED DEFAULT 0,
+      PRIMARY KEY (\`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
 
-      await conn.query(`CREATE TABLE IF NOT EXISTS \`projects\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`school_id\` INT UNSIGNED NOT NULL DEFAULT 1,
-        \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
-        \`project_code\` VARCHAR(50) NOT NULL,
-        \`project_name\` VARCHAR(255) NOT NULL,
-        \`rationale\` TEXT DEFAULT NULL,
-        \`objectives\` TEXT DEFAULT NULL,
-        \`quantitative_goals\` TEXT DEFAULT NULL,
-        \`qualitative_goals\` TEXT DEFAULT NULL,
-        \`kpis\` TEXT DEFAULT NULL,
-        \`procedures\` TEXT DEFAULT NULL,
-        \`duration_start\` VARCHAR(50) DEFAULT NULL,
-        \`duration_end\` VARCHAR(50) DEFAULT NULL,
-        \`location\` VARCHAR(255) DEFAULT NULL,
-        \`target_group\` VARCHAR(255) DEFAULT NULL,
-        \`responsible_person\` VARCHAR(150) NOT NULL DEFAULT '',
-        \`department\` VARCHAR(100) NOT NULL DEFAULT 'ฝ่ายวิชาการ',
-        \`budget_source\` VARCHAR(150) NOT NULL DEFAULT 'เงินอุดหนุนรายหัว',
-        \`allocated_budget\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-        \`spent_budget\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-        \`remaining_budget\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-        \`status\` VARCHAR(50) NOT NULL DEFAULT 'not_started',
-        \`approval_status\` VARCHAR(50) NOT NULL DEFAULT 'approved',
-        \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (\`id\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`users\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_id\` INT UNSIGNED NOT NULL,
+      \`username\` VARCHAR(50) NOT NULL,
+      \`citizen_id\` VARCHAR(20) DEFAULT NULL,
+      \`full_name\` VARCHAR(150) NOT NULL,
+      \`email\` VARCHAR(100) DEFAULT NULL,
+      \`role\` VARCHAR(50) NOT NULL DEFAULT 'teacher',
+      \`department\` VARCHAR(100) DEFAULT NULL,
+      \`position\` VARCHAR(150) DEFAULT NULL,
+      \`phone\` VARCHAR(50) DEFAULT NULL,
+      \`is_active\` TINYINT(1) DEFAULT 1,
+      PRIMARY KEY (\`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
 
-      await conn.query(`CREATE TABLE IF NOT EXISTS \`revenues\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`school_id\` INT UNSIGNED NOT NULL DEFAULT 1,
-        \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
-        \`category\` VARCHAR(50) NOT NULL DEFAULT 'subsidy',
-        \`item_name\` VARCHAR(255) NOT NULL,
-        \`rate_per_head\` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-        \`eligible_count\` INT UNSIGNED NOT NULL DEFAULT 0,
-        \`calculated_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-        \`is_custom_rate\` TINYINT(1) NOT NULL DEFAULT 0,
-        \`note\` TEXT DEFAULT NULL,
-        PRIMARY KEY (\`id\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`students\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_id\` INT UNSIGNED NOT NULL,
+      \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`grade_level\` VARCHAR(100) NOT NULL,
+      \`stage\` VARCHAR(50) NOT NULL,
+      \`male_count\` INT UNSIGNED NOT NULL DEFAULT 0,
+      \`female_count\` INT UNSIGNED NOT NULL DEFAULT 0,
+      \`total_count\` INT UNSIGNED NOT NULL DEFAULT 0,
+      PRIMARY KEY (\`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
 
-      await conn.query(`CREATE TABLE IF NOT EXISTS \`budget_allocations\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`school_id\` INT UNSIGNED NOT NULL DEFAULT 1,
-        \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
-        \`department_name\` VARCHAR(150) NOT NULL,
-        \`percentage\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
-        \`allocated_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-        \`spent_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-        \`remaining_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-        \`color_hex\` VARCHAR(20) DEFAULT '#2563eb',
-        PRIMARY KEY (\`id\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`revenues\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`category\` VARCHAR(50) NOT NULL DEFAULT 'subsidy',
+      \`item_name\` VARCHAR(255) NOT NULL,
+      \`rate_per_head\` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+      \`eligible_count\` INT UNSIGNED NOT NULL DEFAULT 0,
+      \`calculated_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`is_custom_rate\` TINYINT(1) NOT NULL DEFAULT 0,
+      \`note\` TEXT DEFAULT NULL,
+      PRIMARY KEY (\`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
 
-      await conn.query(`CREATE TABLE IF NOT EXISTS \`budget_transactions\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`school_id\` INT UNSIGNED NOT NULL DEFAULT 1,
-        \`project_id\` INT UNSIGNED NOT NULL DEFAULT 0,
-        \`doc_number\` VARCHAR(50) NOT NULL,
-        \`transaction_date\` VARCHAR(50) NOT NULL,
-        \`item_description\` VARCHAR(255) NOT NULL,
-        \`amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-        \`payee\` VARCHAR(150) NOT NULL,
-        \`receipt_number\` VARCHAR(100) DEFAULT NULL,
-        \`approved_by\` VARCHAR(150) NOT NULL,
-        \`status\` VARCHAR(50) NOT NULL DEFAULT 'approved',
-        PRIMARY KEY (\`id\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`budget_allocations\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`department_name\` VARCHAR(150) NOT NULL,
+      \`percentage\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+      \`allocated_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`spent_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`remaining_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`color_hex\` VARCHAR(20) DEFAULT '#2563eb',
+      \`description\` TEXT DEFAULT NULL,
+      PRIMARY KEY (\`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
 
-      // 1. Sync School
-      if (data.school) {
-        const s = data.school;
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`learner_activities\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`activity_name\` VARCHAR(255) NOT NULL,
+      \`percentage\` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+      \`allocated_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`spent_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`remaining_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`note\` TEXT DEFAULT NULL,
+      PRIMARY KEY (\`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`strategies\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`code\` VARCHAR(50) NOT NULL,
+      \`name\` VARCHAR(255) NOT NULL,
+      \`description\` TEXT DEFAULT NULL,
+      PRIMARY KEY (\`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`projects\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`project_code\` VARCHAR(50) NOT NULL,
+      \`project_name\` VARCHAR(255) NOT NULL,
+      \`rationale\` TEXT DEFAULT NULL,
+      \`objectives\` TEXT DEFAULT NULL,
+      \`quantitative_goals\` TEXT DEFAULT NULL,
+      \`qualitative_goals\` TEXT DEFAULT NULL,
+      \`kpis\` TEXT DEFAULT NULL,
+      \`procedures\` TEXT DEFAULT NULL,
+      \`duration_start\` VARCHAR(50) DEFAULT NULL,
+      \`duration_end\` VARCHAR(50) DEFAULT NULL,
+      \`location\` VARCHAR(255) DEFAULT NULL,
+      \`target_group\` VARCHAR(255) DEFAULT NULL,
+      \`responsible_person\` VARCHAR(150) NOT NULL DEFAULT '',
+      \`department\` VARCHAR(100) NOT NULL DEFAULT 'ฝ่ายวิชาการ',
+      \`budget_source\` VARCHAR(150) NOT NULL DEFAULT 'เงินอุดหนุนรายหัว',
+      \`allocated_budget\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`spent_budget\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`remaining_budget\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`status\` VARCHAR(50) NOT NULL DEFAULT 'not_started',
+      \`approval_status\` VARCHAR(50) NOT NULL DEFAULT 'approved',
+      \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (\`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+
+    await conn.query(`CREATE TABLE IF NOT EXISTS \`budget_transactions\` (
+      \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      \`school_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
+      \`project_id\` INT UNSIGNED NOT NULL DEFAULT 0,
+      \`doc_number\` VARCHAR(50) NOT NULL,
+      \`transaction_date\` VARCHAR(50) NOT NULL,
+      \`item_description\` VARCHAR(255) NOT NULL,
+      \`amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+      \`payee\` VARCHAR(150) NOT NULL,
+      \`receipt_number\` VARCHAR(100) DEFAULT NULL,
+      \`approved_by\` VARCHAR(150) NOT NULL,
+      \`status\` VARCHAR(50) NOT NULL DEFAULT 'approved',
+      PRIMARY KEY (\`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+
+    // 1. Determine target school ID
+    let schoolId = Number(schoolIdParam || data.school?.id || 0);
+
+    if (data.school) {
+      const s = data.school;
+      const cleanSmis = String(s.smisCode || s.schoolCode || '10000001').slice(0, 8);
+      const cleanCode = s.schoolCode || (cleanSmis + '00');
+      const sName = s.name || 'โรงเรียนของคุณ';
+
+      if (s.id && s.id > 0) {
         await conn.query(
-          `INSERT INTO schools (id, school_code, smis_code, name, province, education_area, director_name, phone, email, is_active)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          `INSERT INTO schools (id, school_code, smis_code, name, province, education_area, director_name, phone, email, is_active, school_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
            ON DUPLICATE KEY UPDATE
              name = VALUES(name),
              province = VALUES(province),
@@ -509,276 +573,638 @@ export async function saveAppData(data: any): Promise<boolean> {
              phone = VALUES(phone),
              email = VALUES(email),
              updated_at = CURRENT_TIMESTAMP`,
-          [
-            s.id || 1,
-            s.schoolCode || '1000000001',
-            s.smisCode || '10000001',
-            s.name,
-            s.province || '',
-            s.educationArea || '',
-            s.directorName || '',
-            s.phone || '',
-            s.email || '',
-          ]
+          [s.id, cleanCode, cleanSmis, sName, s.province || '', s.educationArea || '', s.directorName || '', s.phone || '', s.email || '', `SCH-${cleanSmis}`]
         );
+        schoolId = s.id;
+      } else {
+        const [insertRes]: any = await conn.query(
+          `INSERT INTO schools (school_code, smis_code, name, province, education_area, director_name, phone, email, is_active, school_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+           ON DUPLICATE KEY UPDATE
+             name = VALUES(name),
+             province = VALUES(province),
+             education_area = VALUES(education_area),
+             director_name = VALUES(director_name),
+             phone = VALUES(phone),
+             email = VALUES(email),
+             updated_at = CURRENT_TIMESTAMP`,
+          [cleanCode, cleanSmis, sName, s.province || '', s.educationArea || '', s.directorName || '', s.phone || '', s.email || '', `SCH-${cleanSmis}`]
+        );
+        schoolId = insertRes.insertId || schoolId || 1;
       }
-
-      // 2. Sync Projects
-      if (Array.isArray(data.projects)) {
-        for (const p of data.projects) {
-          if (!p.id || !p.projectName) continue;
-          await conn.query(
-            `INSERT INTO projects (id, project_code, project_name, rationale, objectives, quantitative_goals, qualitative_goals, kpis, procedures, duration_start, duration_end, location, target_group, responsible_person, department, budget_source, allocated_budget, spent_budget, remaining_budget, status, approval_status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-               project_name = VALUES(project_name),
-               rationale = VALUES(rationale),
-               objectives = VALUES(objectives),
-               quantitative_goals = VALUES(quantitative_goals),
-               qualitative_goals = VALUES(qualitative_goals),
-               kpis = VALUES(kpis),
-               procedures = VALUES(procedures),
-               duration_start = VALUES(duration_start),
-               duration_end = VALUES(duration_end),
-               location = VALUES(location),
-               target_group = VALUES(target_group),
-               responsible_person = VALUES(responsible_person),
-               department = VALUES(department),
-               budget_source = VALUES(budget_source),
-               allocated_budget = VALUES(allocated_budget),
-               spent_budget = VALUES(spent_budget),
-               remaining_budget = VALUES(remaining_budget),
-               status = VALUES(status),
-               approval_status = VALUES(approval_status)`,
-            [
-              p.id,
-              p.projectCode || `PROJ-${p.id}`,
-              p.projectName,
-              p.rationale || '',
-              p.objectives || '',
-              p.quantitativeGoals || '',
-              p.qualitativeGoals || '',
-              p.kpis || '',
-              p.procedures || '',
-              p.durationStart || '',
-              p.durationEnd || '',
-              p.location || '',
-              p.targetGroup || '',
-              p.responsiblePerson || p.proposerName || '',
-              p.department || 'ฝ่ายวิชาการ',
-              p.budgetSource || 'เงินอุดหนุนรายหัว',
-              Number(p.allocatedBudget) || 0,
-              Number(p.spentBudget) || 0,
-              Number(p.remainingBudget) || 0,
-              p.status || 'not_started',
-              p.approvalStatus || 'approved',
-            ]
-          );
-        }
-      }
-
-      // 3. Sync Revenues
-      if (Array.isArray(data.revenues)) {
-        for (const r of data.revenues) {
-          if (!r.id || !r.itemName) continue;
-          await conn.query(
-            `INSERT INTO revenues (id, category, item_name, rate_per_head, eligible_count, calculated_amount, is_custom_rate, note)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-               category = VALUES(category),
-               item_name = VALUES(item_name),
-               rate_per_head = VALUES(rate_per_head),
-               eligible_count = VALUES(eligible_count),
-               calculated_amount = VALUES(calculated_amount),
-               is_custom_rate = VALUES(is_custom_rate),
-               note = VALUES(note)`,
-            [
-              r.id,
-              r.category || 'subsidy',
-              r.itemName,
-              Number(r.ratePerHead) || 0,
-              Number(r.eligibleCount) || 0,
-              Number(r.calculatedAmount) || 0,
-              r.isCustomRate ? 1 : 0,
-              r.note || '',
-            ]
-          );
-        }
-      }
-
-      // 4. Sync Allocations
-      if (Array.isArray(data.allocations)) {
-        for (const a of data.allocations) {
-          if (!a.id || !a.departmentName) continue;
-          await conn.query(
-            `INSERT INTO budget_allocations (id, department_name, percentage, allocated_amount, spent_amount, remaining_amount, color_hex)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-               department_name = VALUES(department_name),
-               percentage = VALUES(percentage),
-               allocated_amount = VALUES(allocated_amount),
-               spent_amount = VALUES(spent_amount),
-               remaining_amount = VALUES(remaining_amount),
-               color_hex = VALUES(color_hex)`,
-            [
-              a.id,
-              a.departmentName,
-              Number(a.percentage) || 0,
-              Number(a.allocatedAmount) || 0,
-              Number(a.spentAmount) || 0,
-              Number(a.remainingAmount) || 0,
-              a.colorHex || '#2563eb',
-            ]
-          );
-        }
-      }
-
-      // 5. Sync Transactions
-      if (Array.isArray(data.transactions)) {
-        for (const t of data.transactions) {
-          if (!t.id || !t.itemDescription) continue;
-          await conn.query(
-            `INSERT INTO budget_transactions (id, project_id, doc_number, transaction_date, item_description, amount, payee, receipt_number, approved_by, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-               project_id = VALUES(project_id),
-               doc_number = VALUES(doc_number),
-               transaction_date = VALUES(transaction_date),
-               item_description = VALUES(item_description),
-               amount = VALUES(amount),
-               payee = VALUES(payee),
-               receipt_number = VALUES(receipt_number),
-               approved_by = VALUES(approved_by),
-               status = VALUES(status)`,
-            [
-              t.id,
-              Number(t.projectId) || 0,
-              t.docNumber || `DOC-${t.id}`,
-              t.transactionDate || '',
-              t.itemDescription,
-              Number(t.amount) || 0,
-              t.payee || '',
-              t.receiptNumber || '',
-              t.approvedBy || '',
-              t.status || 'approved',
-            ]
-          );
-        }
-      }
-
-      await conn.end();
-    } catch (dbErr) {
-      console.warn('MySQL sync warning:', dbErr);
     }
 
-    return true;
-  } catch (err) {
-    console.error('Error saving app data:', err);
-    return false;
+    if (!schoolId) {
+      const [schRows]: any = await conn.query('SELECT id FROM schools WHERE is_active = 1 ORDER BY id ASC LIMIT 1');
+      schoolId = (schRows && schRows.length > 0) ? schRows[0].id : 1;
+    }
+
+    // 2. Sync Fiscal Years for this school
+    if (Array.isArray(data.fiscalYears)) {
+      if (data.fiscalYears.length === 0) {
+        await conn.query('DELETE FROM fiscal_years WHERE school_id = ?', [schoolId]);
+      } else {
+        const keptFyIds: number[] = [];
+        for (const fy of data.fiscalYears) {
+          if (!fy.year) continue;
+          if (fy.id && fy.id > 0) {
+            await conn.query(
+              `INSERT INTO fiscal_years (id, school_id, year, is_active, start_date, end_date, total_students, teacher_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 year = VALUES(year),
+                 is_active = VALUES(is_active),
+                 start_date = VALUES(start_date),
+                 end_date = VALUES(end_date),
+                 total_students = VALUES(total_students),
+                 teacher_count = VALUES(teacher_count)`,
+              [fy.id, schoolId, fy.year, fy.isActive ? 1 : 0, fy.startDate || null, fy.endDate || null, Number(fy.totalStudents) || 0, Number(fy.teacherCount) || 0]
+            );
+            keptFyIds.push(fy.id);
+          } else {
+            const [r]: any = await conn.query(
+              `INSERT INTO fiscal_years (school_id, year, is_active, start_date, end_date, total_students, teacher_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [schoolId, fy.year, fy.isActive ? 1 : 0, fy.startDate || null, fy.endDate || null, Number(fy.totalStudents) || 0, Number(fy.teacherCount) || 0]
+            );
+            if (r.insertId) keptFyIds.push(r.insertId);
+          }
+        }
+        if (keptFyIds.length > 0) {
+          await conn.query(`DELETE FROM fiscal_years WHERE school_id = ? AND id NOT IN (${keptFyIds.join(',')})`, [schoolId]);
+        }
+      }
+    }
+
+    // 3. Sync Users for this school
+    if (Array.isArray(data.users)) {
+      if (data.users.length === 0) {
+        await conn.query('DELETE FROM users WHERE school_id = ?', [schoolId]);
+      } else {
+        const keptUserIds: number[] = [];
+        for (const u of data.users) {
+          if (!u.username || !u.fullName) continue;
+          if (u.id && u.id > 0) {
+            await conn.query(
+              `INSERT INTO users (id, school_id, username, citizen_id, full_name, email, role, department, position, phone, is_active)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 username = VALUES(username),
+                 citizen_id = VALUES(citizen_id),
+                 full_name = VALUES(full_name),
+                 email = VALUES(email),
+                 role = VALUES(role),
+                 department = VALUES(department),
+                 position = VALUES(position),
+                 phone = VALUES(phone),
+                 is_active = VALUES(is_active)`,
+              [u.id, schoolId, u.username, u.citizenId || '', u.fullName, u.email || '', u.role || 'teacher', u.department || '', u.position || '', u.phone || '', u.isActive ? 1 : 0]
+            );
+            keptUserIds.push(u.id);
+          } else {
+            const [ur]: any = await conn.query(
+              `INSERT INTO users (school_id, username, citizen_id, full_name, email, role, department, position, phone, is_active)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [schoolId, u.username, u.citizenId || '', u.fullName, u.email || '', u.role || 'teacher', u.department || '', u.position || '', u.phone || '', u.isActive ? 1 : 0]
+            );
+            if (ur.insertId) keptUserIds.push(ur.insertId);
+          }
+        }
+        if (keptUserIds.length > 0) {
+          await conn.query(`DELETE FROM users WHERE school_id = ? AND id NOT IN (${keptUserIds.join(',')})`, [schoolId]);
+        }
+      }
+    }
+
+    // 4. Sync Students for this school
+    if (Array.isArray(data.students)) {
+      if (data.students.length === 0) {
+        await conn.query('DELETE FROM students WHERE school_id = ?', [schoolId]);
+      } else {
+        const keptStudentIds: number[] = [];
+        for (const st of data.students) {
+          if (!st.gradeLevel) continue;
+          if (st.id && st.id > 0) {
+            await conn.query(
+              `INSERT INTO students (id, school_id, fiscal_year_id, grade_level, stage, male_count, female_count, total_count)
+               VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 grade_level = VALUES(grade_level),
+                 stage = VALUES(stage),
+                 male_count = VALUES(male_count),
+                 female_count = VALUES(female_count),
+                 total_count = VALUES(total_count)`,
+              [st.id, schoolId, st.gradeLevel, st.stage || 'ประถม', Number(st.maleCount) || 0, Number(st.femaleCount) || 0, Number(st.totalCount) || 0]
+            );
+            keptStudentIds.push(st.id);
+          } else {
+            const [sr]: any = await conn.query(
+              `INSERT INTO students (school_id, fiscal_year_id, grade_level, stage, male_count, female_count, total_count)
+               VALUES (?, 1, ?, ?, ?, ?, ?)`,
+              [schoolId, st.gradeLevel, st.stage || 'ประถม', Number(st.maleCount) || 0, Number(st.femaleCount) || 0, Number(st.totalCount) || 0]
+            );
+            if (sr.insertId) keptStudentIds.push(sr.insertId);
+          }
+        }
+        if (keptStudentIds.length > 0) {
+          await conn.query(`DELETE FROM students WHERE school_id = ? AND id NOT IN (${keptStudentIds.join(',')})`, [schoolId]);
+        }
+      }
+    }
+
+    // 5. Sync Revenues for this school
+    if (Array.isArray(data.revenues)) {
+      if (data.revenues.length === 0) {
+        await conn.query('DELETE FROM revenues WHERE school_id = ?', [schoolId]);
+      } else {
+        const keptRevIds: number[] = [];
+        for (const r of data.revenues) {
+          if (!r.itemName) continue;
+          if (r.id && r.id > 0) {
+            await conn.query(
+              `INSERT INTO revenues (id, school_id, fiscal_year_id, category, item_name, rate_per_head, eligible_count, calculated_amount, is_custom_rate, note)
+               VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 category = VALUES(category),
+                 item_name = VALUES(item_name),
+                 rate_per_head = VALUES(rate_per_head),
+                 eligible_count = VALUES(eligible_count),
+                 calculated_amount = VALUES(calculated_amount),
+                 is_custom_rate = VALUES(is_custom_rate),
+                 note = VALUES(note)`,
+              [r.id, schoolId, r.category || 'subsidy', r.itemName, Number(r.ratePerHead) || 0, Number(r.eligibleCount) || 0, Number(r.calculatedAmount) || 0, r.isCustomRate ? 1 : 0, r.note || '']
+            );
+            keptRevIds.push(r.id);
+          } else {
+            const [rr]: any = await conn.query(
+              `INSERT INTO revenues (school_id, fiscal_year_id, category, item_name, rate_per_head, eligible_count, calculated_amount, is_custom_rate, note)
+               VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+              [schoolId, r.category || 'subsidy', r.itemName, Number(r.ratePerHead) || 0, Number(r.eligibleCount) || 0, Number(r.calculatedAmount) || 0, r.isCustomRate ? 1 : 0, r.note || '']
+            );
+            if (rr.insertId) keptRevIds.push(rr.insertId);
+          }
+        }
+        if (keptRevIds.length > 0) {
+          await conn.query(`DELETE FROM revenues WHERE school_id = ? AND id NOT IN (${keptRevIds.join(',')})`, [schoolId]);
+        }
+      }
+    }
+
+    // 6. Sync Allocations for this school
+    if (Array.isArray(data.allocations)) {
+      if (data.allocations.length === 0) {
+        await conn.query('DELETE FROM budget_allocations WHERE school_id = ?', [schoolId]);
+      } else {
+        const keptAllocIds: number[] = [];
+        for (const a of data.allocations) {
+          if (!a.departmentName) continue;
+          if (a.id && a.id > 0) {
+            await conn.query(
+              `INSERT INTO budget_allocations (id, school_id, fiscal_year_id, department_name, percentage, allocated_amount, spent_amount, remaining_amount, color_hex, description)
+               VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 department_name = VALUES(department_name),
+                 percentage = VALUES(percentage),
+                 allocated_amount = VALUES(allocated_amount),
+                 spent_amount = VALUES(spent_amount),
+                 remaining_amount = VALUES(remaining_amount),
+                 color_hex = VALUES(color_hex),
+                 description = VALUES(description)`,
+              [a.id, schoolId, a.departmentName, Number(a.percentage) || 0, Number(a.allocatedAmount) || 0, Number(a.spentAmount) || 0, Number(a.remainingAmount) || 0, a.colorHex || '#2563eb', a.description || '']
+            );
+            keptAllocIds.push(a.id);
+          } else {
+            const [ar]: any = await conn.query(
+              `INSERT INTO budget_allocations (school_id, fiscal_year_id, department_name, percentage, allocated_amount, spent_amount, remaining_amount, color_hex, description)
+               VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+              [schoolId, a.departmentName, Number(a.percentage) || 0, Number(a.allocatedAmount) || 0, Number(a.spentAmount) || 0, Number(a.remainingAmount) || 0, a.colorHex || '#2563eb', a.description || '']
+            );
+            if (ar.insertId) keptAllocIds.push(ar.insertId);
+          }
+        }
+        if (keptAllocIds.length > 0) {
+          await conn.query(`DELETE FROM budget_allocations WHERE school_id = ? AND id NOT IN (${keptAllocIds.join(',')})`, [schoolId]);
+        }
+      }
+    }
+
+    // 7. Sync Learner Activities for this school
+    if (Array.isArray(data.activities)) {
+      if (data.activities.length === 0) {
+        await conn.query('DELETE FROM learner_activities WHERE school_id = ?', [schoolId]);
+      } else {
+        const keptActIds: number[] = [];
+        for (const act of data.activities) {
+          if (!act.activityName) continue;
+          if (act.id && act.id > 0) {
+            await conn.query(
+              `INSERT INTO learner_activities (id, school_id, fiscal_year_id, activity_name, percentage, allocated_amount, spent_amount, remaining_amount, note)
+               VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 activity_name = VALUES(activity_name),
+                 percentage = VALUES(percentage),
+                 allocated_amount = VALUES(allocated_amount),
+                 spent_amount = VALUES(spent_amount),
+                 remaining_amount = VALUES(remaining_amount),
+                 note = VALUES(note)`,
+              [act.id, schoolId, act.activityName, Number(act.percentage) || 0, Number(act.allocatedAmount) || 0, Number(act.spentAmount) || 0, Number(act.remainingAmount) || 0, act.note || '']
+            );
+            keptActIds.push(act.id);
+          } else {
+            const [actRes]: any = await conn.query(
+              `INSERT INTO learner_activities (school_id, fiscal_year_id, activity_name, percentage, allocated_amount, spent_amount, remaining_amount, note)
+               VALUES (?, 1, ?, ?, ?, ?, ?, ?)`,
+              [schoolId, act.activityName, Number(act.percentage) || 0, Number(act.allocatedAmount) || 0, Number(act.spentAmount) || 0, Number(act.remainingAmount) || 0, act.note || '']
+            );
+            if (actRes.insertId) keptActIds.push(actRes.insertId);
+          }
+        }
+        if (keptActIds.length > 0) {
+          await conn.query(`DELETE FROM learner_activities WHERE school_id = ? AND id NOT IN (${keptActIds.join(',')})`, [schoolId]);
+        }
+      }
+    }
+
+    // 8. Sync Strategies for this school
+    if (Array.isArray(data.strategies)) {
+      if (data.strategies.length === 0) {
+        await conn.query('DELETE FROM strategies WHERE school_id = ?', [schoolId]);
+      } else {
+        const keptStratIds: number[] = [];
+        for (const st of data.strategies) {
+          if (!st.name) continue;
+          if (st.id && st.id > 0) {
+            await conn.query(
+              `INSERT INTO strategies (id, school_id, fiscal_year_id, code, name, description)
+               VALUES (?, ?, 1, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 code = VALUES(code),
+                 name = VALUES(name),
+                 description = VALUES(description)`,
+              [st.id, schoolId, st.code || '', st.name, st.description || '']
+            );
+            keptStratIds.push(st.id);
+          } else {
+            const [sr]: any = await conn.query(
+              `INSERT INTO strategies (school_id, fiscal_year_id, code, name, description)
+               VALUES (?, 1, ?, ?, ?)`,
+              [schoolId, st.code || '', st.name, st.description || '']
+            );
+            if (sr.insertId) keptStratIds.push(sr.insertId);
+          }
+        }
+        if (keptStratIds.length > 0) {
+          await conn.query(`DELETE FROM strategies WHERE school_id = ? AND id NOT IN (${keptStratIds.join(',')})`, [schoolId]);
+        }
+      }
+    }
+
+    // 9. Sync Projects for this school
+    if (Array.isArray(data.projects)) {
+      if (data.projects.length === 0) {
+        await conn.query('DELETE FROM projects WHERE school_id = ?', [schoolId]);
+      } else {
+        const keptProjIds: number[] = [];
+        for (const p of data.projects) {
+          if (!p.projectName) continue;
+          if (p.id && p.id > 0) {
+            await conn.query(
+              `INSERT INTO projects (id, school_id, fiscal_year_id, project_code, project_name, rationale, objectives, quantitative_goals, qualitative_goals, kpis, procedures, duration_start, duration_end, location, target_group, responsible_person, department, budget_source, allocated_budget, spent_budget, remaining_budget, status, approval_status)
+               VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 project_name = VALUES(project_name),
+                 project_code = VALUES(project_code),
+                 rationale = VALUES(rationale),
+                 objectives = VALUES(objectives),
+                 quantitative_goals = VALUES(quantitative_goals),
+                 qualitative_goals = VALUES(qualitative_goals),
+                 kpis = VALUES(kpis),
+                 procedures = VALUES(procedures),
+                 duration_start = VALUES(duration_start),
+                 duration_end = VALUES(duration_end),
+                 location = VALUES(location),
+                 target_group = VALUES(target_group),
+                 responsible_person = VALUES(responsible_person),
+                 department = VALUES(department),
+                 budget_source = VALUES(budget_source),
+                 allocated_budget = VALUES(allocated_budget),
+                 spent_budget = VALUES(spent_budget),
+                 remaining_budget = VALUES(remaining_budget),
+                 status = VALUES(status),
+                 approval_status = VALUES(approval_status)`,
+              [
+                p.id,
+                schoolId,
+                p.projectCode || `PROJ-${p.id}`,
+                p.projectName,
+                p.rationale || '',
+                p.objectives || '',
+                p.quantitativeGoals || '',
+                p.qualitativeGoals || '',
+                p.kpis || '',
+                p.procedures || '',
+                p.durationStart || '',
+                p.durationEnd || '',
+                p.location || '',
+                p.targetGroup || '',
+                p.responsiblePerson || p.proposerName || '',
+                p.department || 'ฝ่ายวิชาการ',
+                p.budgetSource || 'เงินอุดหนุนรายหัว',
+                Number(p.allocatedBudget) || 0,
+                Number(p.spentBudget) || 0,
+                Number(p.remainingBudget) || 0,
+                p.status || 'not_started',
+                p.approvalStatus || 'approved',
+              ]
+            );
+            keptProjIds.push(p.id);
+          } else {
+            const [pr]: any = await conn.query(
+              `INSERT INTO projects (school_id, fiscal_year_id, project_code, project_name, rationale, objectives, quantitative_goals, qualitative_goals, kpis, procedures, duration_start, duration_end, location, target_group, responsible_person, department, budget_source, allocated_budget, spent_budget, remaining_budget, status, approval_status)
+               VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                schoolId,
+                p.projectCode || `PROJ-${Date.now()}`,
+                p.projectName,
+                p.rationale || '',
+                p.objectives || '',
+                p.quantitativeGoals || '',
+                p.qualitativeGoals || '',
+                p.kpis || '',
+                p.procedures || '',
+                p.durationStart || '',
+                p.durationEnd || '',
+                p.location || '',
+                p.targetGroup || '',
+                p.responsiblePerson || p.proposerName || '',
+                p.department || 'ฝ่ายวิชาการ',
+                p.budgetSource || 'เงินอุดหนุนรายหัว',
+                Number(p.allocatedBudget) || 0,
+                Number(p.spentBudget) || 0,
+                Number(p.remainingBudget) || 0,
+                p.status || 'not_started',
+                p.approvalStatus || 'approved',
+              ]
+            );
+            if (pr.insertId) keptProjIds.push(pr.insertId);
+          }
+        }
+        if (keptProjIds.length > 0) {
+          await conn.query(`DELETE FROM projects WHERE school_id = ? AND id NOT IN (${keptProjIds.join(',')})`, [schoolId]);
+        }
+      }
+    }
+
+    // 10. Sync Transactions for this school
+    if (Array.isArray(data.transactions)) {
+      if (data.transactions.length === 0) {
+        await conn.query('DELETE FROM budget_transactions WHERE school_id = ?', [schoolId]);
+      } else {
+        const keptTxIds: number[] = [];
+        for (const t of data.transactions) {
+          if (!t.itemDescription) continue;
+          if (t.id && t.id > 0) {
+            await conn.query(
+              `INSERT INTO budget_transactions (id, school_id, fiscal_year_id, project_id, doc_number, transaction_date, item_description, amount, payee, receipt_number, approved_by, status)
+               VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 project_id = VALUES(project_id),
+                 doc_number = VALUES(doc_number),
+                 transaction_date = VALUES(transaction_date),
+                 item_description = VALUES(item_description),
+                 amount = VALUES(amount),
+                 payee = VALUES(payee),
+                 receipt_number = VALUES(receipt_number),
+                 approved_by = VALUES(approved_by),
+                 status = VALUES(status)`,
+              [
+                t.id,
+                schoolId,
+                Number(t.projectId) || 0,
+                t.docNumber || `DOC-${t.id}`,
+                t.transactionDate || '',
+                t.itemDescription,
+                Number(t.amount) || 0,
+                t.payee || '',
+                t.receiptNumber || '',
+                t.approvedBy || '',
+                t.status || 'approved',
+              ]
+            );
+            keptTxIds.push(t.id);
+          } else {
+            const [tr]: any = await conn.query(
+              `INSERT INTO budget_transactions (school_id, fiscal_year_id, project_id, doc_number, transaction_date, item_description, amount, payee, receipt_number, approved_by, status)
+               VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                schoolId,
+                Number(t.projectId) || 0,
+                t.docNumber || `DOC-${Date.now()}`,
+                t.transactionDate || '',
+                t.itemDescription,
+                Number(t.amount) || 0,
+                t.payee || '',
+                t.receiptNumber || '',
+                t.approvedBy || '',
+                t.status || 'approved',
+              ]
+            );
+            if (tr.insertId) keptTxIds.push(tr.insertId);
+          }
+        }
+        if (keptTxIds.length > 0) {
+          await conn.query(`DELETE FROM budget_transactions WHERE school_id = ? AND id NOT IN (${keptTxIds.join(',')})`, [schoolId]);
+        }
+      }
+    }
+
+    await conn.end();
+
+    // บันทึกลง Disk File เป็น Backup สำรอง
+    try {
+      const dir = path.dirname(APP_DB_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(APP_DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    } catch (e) {}
+
+    return {
+      success: true,
+      message: 'บันทึกข้อมูลลงฐานข้อมูล MySQL จริงสำเร็จสมบูรณ์ 100%',
+    };
+  } catch (err: any) {
+    console.error('CRITICAL: Error saving to MySQL database:', err);
+    throw new Error(`ไม่สามารถบันทึกข้อมูลลง MySQL ได้: ${err.message}`);
   }
 }
 
 /**
- * ดึง App Data จาก Persistent Storage (ลองดึงจาก MySQL เป็นอันดับแรก)
+ * ดึง App Data ทั้งหมดจาก MySQL โดยตรงตาม school_id
  */
-export async function loadAppData(): Promise<any | null> {
-  // 1. ลองดึงจาก MySQL ก่อน
+export async function loadAppData(schoolIdParam?: number): Promise<any> {
+  const conn = await getDirectConnection();
   try {
-    const conn = await getDirectConnection();
-    const [schools]: any = await conn.query('SELECT * FROM schools WHERE is_active = 1 ORDER BY id DESC LIMIT 1');
-    const [projects]: any = await conn.query('SELECT * FROM projects ORDER BY id ASC');
-    const [revenues]: any = await conn.query('SELECT * FROM revenues ORDER BY id ASC');
-    const [allocations]: any = await conn.query('SELECT * FROM budget_allocations ORDER BY id ASC');
-    const [transactions]: any = await conn.query('SELECT * FROM budget_transactions ORDER BY id DESC');
+    // 1. School query
+    let schoolSql = 'SELECT * FROM schools WHERE is_active = 1 ORDER BY id ASC LIMIT 1';
+    let schoolParams: any[] = [];
+    if (schoolIdParam && schoolIdParam > 0) {
+      schoolSql = 'SELECT * FROM schools WHERE id = ? LIMIT 1';
+      schoolParams = [schoolIdParam];
+    }
+    const [schools]: any = await conn.query(schoolSql, schoolParams);
+    const s = schools && schools.length > 0 ? schools[0] : null;
+
+    if (!s) {
+      await conn.end();
+      return null;
+    }
+
+    const schoolId = s.id;
+
+    // 2. Query all tables filtered by school_id
+    const [fiscalYears]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? ORDER BY year DESC', [schoolId]);
+    const [users]: any = await conn.query('SELECT * FROM users WHERE school_id = ? ORDER BY id ASC', [schoolId]);
+    const [students]: any = await conn.query('SELECT * FROM students WHERE school_id = ? ORDER BY id ASC', [schoolId]);
+    const [revenues]: any = await conn.query('SELECT * FROM revenues WHERE school_id = ? ORDER BY id ASC', [schoolId]);
+    const [allocations]: any = await conn.query('SELECT * FROM budget_allocations WHERE school_id = ? ORDER BY id ASC', [schoolId]);
+    const [activities]: any = await conn.query('SELECT * FROM learner_activities WHERE school_id = ? ORDER BY id ASC', [schoolId]);
+    const [strategies]: any = await conn.query('SELECT * FROM strategies WHERE school_id = ? ORDER BY id ASC', [schoolId]);
+    const [projects]: any = await conn.query('SELECT * FROM projects WHERE school_id = ? ORDER BY id ASC', [schoolId]);
+    const [transactions]: any = await conn.query('SELECT * FROM budget_transactions WHERE school_id = ? ORDER BY id DESC', [schoolId]);
+
     await conn.end();
 
-    if ((schools && schools.length > 0) || (projects && projects.length > 0)) {
-      const s = schools && schools.length > 0 ? schools[0] : null;
-      return {
-        school: s
-          ? {
-              id: s.id,
-              schoolCode: s.school_code,
-              smisCode: s.smis_code,
-              name: s.name,
-              province: s.province,
-              educationArea: s.education_area,
-              directorName: s.director_name,
-              phone: s.phone,
-              email: s.email,
-            }
-          : undefined,
-        projects: projects?.map((p: any) => ({
-          id: p.id,
-          projectCode: p.project_code,
-          projectName: p.project_name,
-          rationale: p.rationale,
-          objectives: p.objectives,
-          quantitativeGoals: p.quantitative_goals,
-          qualitativeGoals: p.qualitative_goals,
-          kpis: p.kpis,
-          procedures: p.procedures,
-          durationStart: p.duration_start,
-          durationEnd: p.duration_end,
-          location: p.location,
-          targetGroup: p.target_group,
-          responsiblePerson: p.responsible_person,
-          department: p.department,
-          budgetSource: p.budget_source,
-          allocatedBudget: Number(p.allocated_budget) || 0,
-          spentBudget: Number(p.spent_budget) || 0,
-          remainingBudget: Number(p.remaining_budget) || 0,
-          status: p.status,
-          approvalStatus: p.approval_status,
-        })),
-        revenues: revenues?.map((r: any) => ({
-          id: r.id,
-          category: r.category,
-          itemName: r.item_name,
-          ratePerHead: Number(r.rate_per_head) || 0,
-          eligibleCount: Number(r.eligible_count) || 0,
-          calculatedAmount: Number(r.calculated_amount) || 0,
-          isCustomRate: r.is_custom_rate === 1,
-          note: r.note,
-        })),
-        allocations: allocations?.map((a: any) => ({
-          id: a.id,
-          departmentName: a.department_name,
-          percentage: Number(a.percentage) || 0,
-          allocatedAmount: Number(a.allocated_amount) || 0,
-          spentAmount: Number(a.spent_amount) || 0,
-          remainingAmount: Number(a.remaining_amount) || 0,
-          colorHex: a.color_hex,
-        })),
-        transactions: transactions?.map((t: any) => ({
-          id: t.id,
-          projectId: t.project_id,
-          docNumber: t.doc_number,
-          transactionDate: t.transaction_date,
-          itemDescription: t.item_description,
-          amount: Number(t.amount) || 0,
-          payee: t.payee,
-          receiptNumber: t.receipt_number,
-          approvedBy: t.approved_by,
-          status: t.status,
-        })),
-      };
+    return {
+      school: {
+        id: s.id,
+        schoolCode: s.school_code,
+        smisCode: s.smis_code,
+        name: s.name,
+        province: s.province,
+        educationArea: s.education_area,
+        directorName: s.director_name,
+        phone: s.phone,
+        email: s.email,
+        isActive: s.is_active === 1,
+        schoolKey: s.school_key,
+      },
+      fiscalYears: (fiscalYears || []).map((fy: any) => ({
+        id: fy.id,
+        schoolId: fy.school_id,
+        year: fy.year,
+        isActive: fy.is_active === 1,
+        startDate: fy.start_date,
+        endDate: fy.end_date,
+        totalStudents: Number(fy.total_students) || 0,
+        teacherCount: Number(fy.teacher_count) || 0,
+      })),
+      users: (users || []).map((u: any) => ({
+        id: u.id,
+        schoolId: u.school_id,
+        username: u.username,
+        citizenId: u.citizen_id,
+        fullName: u.full_name,
+        email: u.email,
+        role: u.role,
+        department: u.department,
+        position: u.position,
+        phone: u.phone,
+        isActive: u.is_active === 1,
+      })),
+      students: (students || []).map((st: any) => ({
+        id: st.id,
+        schoolId: st.school_id,
+        fiscalYearId: st.fiscal_year_id,
+        gradeLevel: st.grade_level,
+        stage: st.stage,
+        maleCount: Number(st.male_count) || 0,
+        femaleCount: Number(st.female_count) || 0,
+        totalCount: Number(st.total_count) || 0,
+      })),
+      revenues: (revenues || []).map((r: any) => ({
+        id: r.id,
+        schoolId: r.school_id,
+        fiscalYearId: r.fiscal_year_id,
+        category: r.category,
+        itemName: r.item_name,
+        ratePerHead: Number(r.rate_per_head) || 0,
+        eligibleCount: Number(r.eligible_count) || 0,
+        calculatedAmount: Number(r.calculated_amount) || 0,
+        isCustomRate: r.is_custom_rate === 1,
+        note: r.note,
+      })),
+      allocations: (allocations || []).map((a: any) => ({
+        id: a.id,
+        schoolId: a.school_id,
+        fiscalYearId: a.fiscal_year_id,
+        departmentName: a.department_name,
+        percentage: Number(a.percentage) || 0,
+        allocatedAmount: Number(a.allocated_amount) || 0,
+        spentAmount: Number(a.spent_amount) || 0,
+        remainingAmount: Number(a.remaining_amount) || 0,
+        colorHex: a.color_hex,
+        description: a.description,
+      })),
+      activities: (activities || []).map((act: any) => ({
+        id: act.id,
+        schoolId: act.school_id,
+        fiscalYearId: act.fiscal_year_id,
+        activityName: act.activity_name,
+        percentage: Number(act.percentage) || 0,
+        allocatedAmount: Number(act.allocated_amount) || 0,
+        spentAmount: Number(act.spent_amount) || 0,
+        remainingAmount: Number(act.remaining_amount) || 0,
+        note: act.note,
+      })),
+      strategies: (strategies || []).map((st: any) => ({
+        id: st.id,
+        schoolId: st.school_id,
+        fiscalYearId: st.fiscal_year_id,
+        code: st.code,
+        name: st.name,
+        description: st.description,
+      })),
+      projects: (projects || []).map((p: any) => ({
+        id: p.id,
+        schoolId: p.school_id,
+        projectCode: p.project_code,
+        projectName: p.project_name,
+        rationale: p.rationale,
+        objectives: p.objectives,
+        quantitativeGoals: p.quantitative_goals,
+        qualitativeGoals: p.qualitative_goals,
+        kpis: p.kpis,
+        procedures: p.procedures,
+        durationStart: p.duration_start,
+        durationEnd: p.duration_end,
+        location: p.location,
+        targetGroup: p.target_group,
+        responsiblePerson: p.responsible_person,
+        department: p.department,
+        budgetSource: p.budget_source,
+        allocatedBudget: Number(p.allocated_budget) || 0,
+        spentBudget: Number(p.spent_budget) || 0,
+        remainingBudget: Number(p.remaining_budget) || 0,
+        status: p.status,
+        approvalStatus: p.approval_status,
+      })),
+      transactions: (transactions || []).map((t: any) => ({
+        id: t.id,
+        schoolId: t.school_id,
+        projectId: t.project_id,
+        docNumber: t.doc_number,
+        transactionDate: t.transaction_date,
+        itemDescription: t.item_description,
+        amount: Number(t.amount) || 0,
+        payee: t.payee,
+        receiptNumber: t.receipt_number,
+        approvedBy: t.approved_by,
+        status: t.status,
+      })),
+    };
+  } catch (err: any) {
+    if (conn) {
+      try { await conn.end(); } catch (e) {}
     }
-  } catch (err) {
-    // MySQL not reachable, fallback to disk file
+    throw new Error(`ไม่สามารถโหลดข้อมูลจากฐานข้อมูล MySQL ได้: ${err.message}`);
   }
-
-  // 2. อ่านจาก Disk File สำรอง
-  try {
-    if (fs.existsSync(APP_DB_FILE)) {
-      const content = fs.readFileSync(APP_DB_FILE, 'utf-8');
-      const parsed = JSON.parse(content);
-      if (parsed && typeof parsed === 'object') {
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.error('Error reading app data from disk:', e);
-  }
-  return null;
 }
