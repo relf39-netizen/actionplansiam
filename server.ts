@@ -775,13 +775,13 @@ async function getSuperAdminAccount(): Promise<{
   };
 }
 
-// Update Super Admin account directly in MySQL database and sync to local file
+// Update Super Admin account directly in MySQL database (both super_admins and users table) and sync to local file
 async function updateSuperAdminAccount(data: {
   username?: string;
   password?: string;
   fullName?: string;
   email?: string;
-}): Promise<boolean> {
+}): Promise<{ success: boolean; mysqlUpdated: boolean; error?: string }> {
   const current = await getSuperAdminAccount();
   const newUsername = (data.username || current.username).trim();
   const newPassword = (data.password !== undefined && data.password !== '' ? data.password : current.password).trim();
@@ -800,9 +800,11 @@ async function updateSuperAdminAccount(data: {
     updatedAt: new Date().toISOString(),
   });
 
-  // 2. Save directly to MySQL super_admins table
+  // 2. Save directly to MySQL: BOTH super_admins table AND users table
   try {
     const conn = await getDirectConnection();
+
+    // 2.1 Table super_admins
     await conn.query(`CREATE TABLE IF NOT EXISTS \`super_admins\` (
       \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
       \`username\` VARCHAR(50) NOT NULL UNIQUE,
@@ -823,16 +825,70 @@ async function updateSuperAdminAccount(data: {
       );
     } else {
       await conn.query(
-        'INSERT INTO `super_admins` (username, password_hash, full_name, email) VALUES (?, ?, ?, ?)',
+        'INSERT INTO `super_admins` (id, username, password_hash, full_name, email) VALUES (1, ?, ?, ?, ?)',
         [newUsername, newPassword, newFullName, newEmail]
       );
     }
+
+    // 2.2 Table users (so phpMyAdmin users table is also updated!)
+    try {
+      await conn.query('ALTER TABLE `users` MODIFY COLUMN `school_id` INT UNSIGNED DEFAULT NULL');
+    } catch (e) {}
+
+    const [uRows]: any = await conn.query('SELECT id FROM `users` WHERE username = ? OR role = "superadmin" LIMIT 1', [newUsername]);
+    if (uRows && uRows.length > 0) {
+      await conn.query(
+        'UPDATE `users` SET username = ?, password_hash = ?, full_name = ?, email = ?, role = "superadmin", is_password_changed = 1 WHERE id = ?',
+        [newUsername, newPassword, newFullName, newEmail, uRows[0].id]
+      );
+    } else {
+      await conn.query(
+        `INSERT INTO \`users\` (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, is_active, status, is_password_changed)
+         VALUES (NULL, ?, ?, ?, ?, ?, 'superadmin', 'ส่วนกลาง สพฐ.', 'Super Admin', 1, 'approved', 1)`,
+        [newUsername, newUsername, newPassword, newFullName, newEmail]
+      );
+    }
+
     await conn.end();
-    return true;
+    return { success: true, mysqlUpdated: true };
   } catch (e: any) {
     console.warn('MySQL update super_admins failed (saved to local config file):', e.message);
-    return true;
+    return { success: true, mysqlUpdated: false, error: e.message };
   }
+}
+
+// Fetch schools list from MySQL first, then fallback to local file
+async function getSchoolsFromDbOrFile(): Promise<any[]> {
+  try {
+    const conn = await getDirectConnection();
+    const [rows]: any = await conn.query('SELECT * FROM `schools` ORDER BY id ASC');
+    await conn.end();
+    if (rows && rows.length > 0) {
+      const mapped = rows.map((r: any) => ({
+        id: r.id,
+        schoolCode: r.school_code,
+        smisCode: r.smis_code,
+        name: r.name,
+        province: r.province || '',
+        educationArea: r.education_area || '',
+        directorName: r.director_name || '',
+        phone: r.phone || '',
+        email: r.email || '',
+        isActive: r.is_active === 1 || r.is_active === true,
+        schoolKey: r.school_key,
+        adminUsername: r.admin_username,
+        adminPasswordPlain: r.admin_password_plain,
+        studentCount: r.student_count || 0,
+        projectCount: r.project_count || 0,
+        totalBudget: r.total_budget || 0,
+        notes: r.notes || '',
+      }));
+      saveStoredSchools(mapped);
+      return mapped;
+    }
+  } catch (e) {}
+
+  return getStoredSchools();
 }
 
 async function getStoredUsers(): Promise<any[]> {
@@ -1303,8 +1359,10 @@ app.post('/api/super-admin/schools', async (req, res) => {
 
   const cleanSmis = String(smisCode).trim();
   const schoolKey = `SCH-${cleanSmis}`;
+  let schools = await getSchoolsFromDbOrFile();
+  const maxSchoolId = schools.reduce((m: number, s: any) => Math.max(m, (s.id && s.id < 1000000 ? s.id : 0)), 0);
   const newSchool: any = {
-    id: Date.now(),
+    id: maxSchoolId + 1,
     schoolCode: `${cleanSmis}00`,
     smisCode: cleanSmis,
     isActive: true,
@@ -1340,10 +1398,14 @@ app.post('/api/super-admin/schools', async (req, res) => {
     );
     if (result && result.insertId) {
       newSchool.id = result.insertId;
+    } else {
+      const [exRows]: any = await conn.query('SELECT id FROM `schools` WHERE smis_code = ? LIMIT 1', [cleanSmis]);
+      if (exRows && exRows.length > 0) {
+        newSchool.id = exRows[0].id;
+      }
     }
     await conn.end();
 
-    let schools = getStoredSchools();
     schools = schools.filter((s: any) => s.smisCode !== cleanSmis && s.id !== newSchool.id);
     schools.push(newSchool);
     saveStoredSchools(schools);
@@ -1558,11 +1620,15 @@ app.post('/api/auth/super-admin/change-password', async (req, res) => {
     return res.status(400).json({ success: false, message: 'รหัสผ่านใหม่ต้องมีความยาวอย่างน้อย 3 ตัวอักษร' });
   }
 
-  await updateSuperAdminAccount({
+  const result = await updateSuperAdminAccount({
     password: newPassword.trim(),
   });
 
-  return res.json({ success: true, message: 'เปลี่ยนรหัสผ่าน Super Admin และบันทึกลงฐานข้อมูลเรียบร้อยแล้ว' });
+  const msg = result.mysqlUpdated
+    ? 'เปลี่ยนรหัสผ่าน Super Admin และบันทึกลงตาราง super_admins และ users ในฐานข้อมูล MySQL เรียบร้อยแล้ว'
+    : `บันทึกรหัสผ่านลงระบบสำรองเรียบร้อยแล้ว (MySQL ยังไม่ได้เชื่อมต่อ: ${result.error || 'กรุณาตรวจสอบรหัสผ่านฐานข้อมูลในแท็บจัดการฐานข้อมูล'})`;
+
+  return res.json({ success: true, message: msg, mysqlUpdated: result.mysqlUpdated });
 });
 
 // --- SUPER ADMIN ACCOUNT MANAGEMENT (MySQL Database) ---
@@ -1593,7 +1659,7 @@ app.post('/api/super-admin/account', async (req, res) => {
       return res.status(400).json({ success: false, message: 'รหัสผ่านใหม่ต้องมีอย่างน้อย 3 ตัวอักษร' });
     }
 
-    await updateSuperAdminAccount({
+    const result = await updateSuperAdminAccount({
       username: username ? username.trim() : undefined,
       password: password ? password.trim() : undefined,
       fullName: fullName ? fullName.trim() : undefined,
@@ -1601,9 +1667,14 @@ app.post('/api/super-admin/account', async (req, res) => {
     });
 
     const updated = await getSuperAdminAccount();
+    const msg = result.mysqlUpdated
+      ? 'บันทึกข้อมูลและรหัสผ่าน Super Admin ลงในตาราง super_admins และ users ของ MySQL (phpMyAdmin) สำเร็จสมบูรณ์'
+      : `บันทึกลงระบบไฟล์สำรองสำเร็จแล้ว (MySQL ยังไม่ได้เชื่อมต่อ: ${result.error || 'กรุณาตรวจสอบการตั้งค่าในแท็บฐานข้อมูล'})`;
+
     return res.json({
       success: true,
-      message: 'บันทึกข้อมูลและรหัสผ่าน Super Admin ลงในฐานข้อมูล MySQL สำเร็จเรียบร้อยแล้ว',
+      message: msg,
+      mysqlUpdated: result.mysqlUpdated,
       account: {
         username: updated.username,
         fullName: updated.fullName,
@@ -1616,12 +1687,44 @@ app.post('/api/super-admin/account', async (req, res) => {
   }
 });
 
+// --- SUPER ADMIN SCHOOL FUNDING & BUDGET DETAILS ---
+app.get('/api/super-admin/school-funding/:schoolId', async (req, res) => {
+  try {
+    const schoolId = Number(req.params.schoolId);
+    const data = await loadAppData(schoolId);
+    const schools = await getSchoolsFromDbOrFile();
+    const school = schools.find((s: any) => s.id === schoolId || String(s.smisCode) === String(schoolId));
+    const users = await getStoredUsers();
+    const teachers = users.filter(
+      (u: any) => (u.schoolId === schoolId || u.schoolSmis === school?.smisCode) && u.role !== 'superadmin'
+    );
+
+    return res.json({
+      success: true,
+      school: school || data?.school,
+      allocations: data?.allocations || [],
+      revenues: data?.revenues || [],
+      projects: data?.projects || [],
+      transactions: data?.transactions || [],
+      teachers,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // --- SUPER ADMIN USERS LIST (Across all schools) ---
 app.get('/api/super-admin/users', async (req, res) => {
   try {
     const users = await getStoredUsers();
-    const schools = getStoredSchools();
-    const schoolMap = new Map<number, any>();
+    const schools = await getSchoolsFromDbOrFile();
+    const schoolMap = new Map<any, any>();
+    schools.forEach((s: any) => {
+      schoolMap.set(s.id, s);
+      schoolMap.set(String(s.id), s);
+      if (s.smisCode) schoolMap.set(String(s.smisCode), s);
+      if (s.schoolCode) schoolMap.set(String(s.schoolCode), s);
+    });
     schools.forEach((s: any) => {
       schoolMap.set(s.id, s);
       if (s.smisCode) schoolMap.set(s.smisCode, s);

@@ -28,7 +28,7 @@
     "email": "rakrian@school.th",
     "phone": "0811112233",
     "role": "admin",
-    "schoolId": 1790262514221,
+    "schoolId": 2,
     "schoolSmis": "10400199",
     "password": "1-6",
     "isPasswordChanged": false,
@@ -46,13 +46,12 @@
     "email": "siriporn@school.th",
     "phone": "0899998888",
     "role": "teacher",
-    "schoolId": 1790262514221,
+    "schoolId": 2,
     "schoolSmis": "10400199",
     "password": "1-6",
     "isPasswordChanged": false,
-    "status": "approved",
+    "status": "pending",
     "registeredAt": "2026-09-24T15:08:57.361Z",
-    "isActive": true,
-    "approvedAt": "2026-09-24T15:09:05.688Z"
+    "isActive": true
   }
 ]

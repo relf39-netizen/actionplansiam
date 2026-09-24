@@ -19,14 +19,14 @@
     "notes": "โรงเรียนเริ่มต้น"
   },
   {
-    "id": 1790262514221,
+    "id": 2,
     "schoolCode": "1040019900",
     "smisCode": "10400199",
     "isActive": true,
     "schoolKey": "SCH-10400199",
     "name": "โรงเรียนอนุบาลสามเสน",
-    "province": "",
-    "educationArea": "",
+    "province": "กรุงเทพมหานคร",
+    "educationArea": "สำนักงานเขตพื้นที่การศึกษาประถมศึกษากรุงเทพมหานคร",
     "directorName": "",
     "phone": "",
     "email": "",
