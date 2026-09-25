@@ -830,30 +830,32 @@ async function updateSuperAdminAccount(data: {
       );
     }
 
-    // 2.2 Table users (so phpMyAdmin users table is also updated!)
+    // 2.2 Table users (so phpMyAdmin users table is also updated if exists)
     try {
+      await conn.query('ALTER TABLE `users` MODIFY COLUMN `role` VARCHAR(50) NOT NULL DEFAULT "teacher"');
       await conn.query('ALTER TABLE `users` MODIFY COLUMN `school_id` INT UNSIGNED DEFAULT NULL');
-    } catch (e) {}
-
-    const [uRows]: any = await conn.query('SELECT id FROM `users` WHERE username = ? OR role = "superadmin" LIMIT 1', [newUsername]);
-    if (uRows && uRows.length > 0) {
-      await conn.query(
-        'UPDATE `users` SET username = ?, password_hash = ?, full_name = ?, email = ?, role = "superadmin", is_password_changed = 1 WHERE id = ?',
-        [newUsername, newPassword, newFullName, newEmail, uRows[0].id]
-      );
-    } else {
-      await conn.query(
-        `INSERT INTO \`users\` (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, is_active, status, is_password_changed)
-         VALUES (NULL, ?, ?, ?, ?, ?, 'superadmin', 'ส่วนกลาง สพฐ.', 'Super Admin', 1, 'approved', 1)`,
-        [newUsername, newUsername, newPassword, newFullName, newEmail]
-      );
+      const [uRows]: any = await conn.query('SELECT id FROM `users` WHERE username = ? OR role = "superadmin" LIMIT 1', [newUsername]);
+      if (uRows && uRows.length > 0) {
+        await conn.query(
+          'UPDATE `users` SET username = ?, password_hash = ?, full_name = ?, email = ?, role = "superadmin", is_password_changed = 1 WHERE id = ?',
+          [newUsername, newPassword, newFullName, newEmail, uRows[0].id]
+        );
+      } else {
+        await conn.query(
+          `INSERT INTO \`users\` (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, is_active, status, is_password_changed)
+           VALUES (NULL, ?, ?, ?, ?, ?, 'superadmin', 'ส่วนกลาง สพฐ.', 'Super Admin', 1, 'approved', 1)`,
+          [newUsername, newUsername, newPassword, newFullName, newEmail]
+        );
+      }
+    } catch (uErr) {
+      console.warn('Super Admin sync to users table warning:', uErr);
     }
 
     await conn.end();
     return { success: true, mysqlUpdated: true };
   } catch (e: any) {
-    console.warn('MySQL update super_admins failed (saved to local config file):', e.message);
-    return { success: true, mysqlUpdated: false, error: e.message };
+    console.error('MySQL update super_admins failed:', e.message);
+    return { success: false, mysqlUpdated: false, error: e.message };
   }
 }
 
@@ -999,16 +1001,7 @@ async function getStoredUsers(): Promise<any[]> {
 }
 
 async function saveStoredUsers(users: any[]) {
-  // 1. Write to cache file
-  try {
-    const dir = path.dirname(USERS_DATA_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Error saving users data file:', e);
-  }
-
-  // 2. Sync to MySQL users table
+  // MySQL is authoritative; a cache write must not be reported as a successful registration.
   try {
     const conn = await getDirectConnection();
     for (const u of users) {
@@ -1074,6 +1067,14 @@ async function saveStoredUsers(users: any[]) {
     await conn.end();
   } catch (e) {
     console.error('Error saving users to MySQL:', e);
+    throw e;
+  }
+  try {
+    const dir = path.dirname(USERS_DATA_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not update user cache:', e);
   }
 }
 
@@ -1099,7 +1100,7 @@ app.post(['/api/database', '/api/app-data'], async (req, res) => {
     if (result && result.success) {
       return res.json({ success: true, message: result.message || 'บันทึกข้อมูลสำเร็จและซิงค์กับฐานข้อมูลเรียบร้อยแล้ว' });
     }
-    return res.status(500).json({ success: false, message: 'ไม่สามารถบันทึกข้อมูลได้' });
+    return res.status(500).json({ success: false, message: result?.error || result?.message || 'ไม่สามารถบันทึกข้อมูลได้' });
   } catch (e: any) {
     console.error('Error saving app database:', e);
     return res.status(500).json({ success: false, message: e.message });
@@ -1753,7 +1754,7 @@ app.post('/api/super-admin/approve-user', async (req, res) => {
   }
 
   const users = await getStoredUsers();
-  const schools = getStoredSchools();
+  const schools = await getSchoolsFromDbOrFile();
   const targetUser = users.find((u: any) => u.id === Number(userId));
 
   if (!targetUser) {
@@ -1761,8 +1762,19 @@ app.post('/api/super-admin/approve-user', async (req, res) => {
   }
 
   if (status === 'rejected' || status === 'delete') {
+    try {
+      const conn = await getDirectConnection();
+      await conn.query('DELETE FROM users WHERE id = ?', [targetUser.id]);
+      await conn.end();
+    } catch (e) {
+      console.warn('MySQL delete user warning:', e);
+    }
     const remainingUsers = users.filter((u: any) => u.id !== targetUser.id);
-    await saveStoredUsers(remainingUsers);
+    try {
+      const dir = path.dirname(USERS_DATA_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(USERS_DATA_FILE, JSON.stringify(remainingUsers, null, 2), 'utf-8');
+    } catch (e) {}
     return res.json({ success: true, message: `ลบคำขอสมัครของ "${targetUser.fullName}" เรียบร้อยแล้ว` });
   }
 
@@ -1833,7 +1845,7 @@ app.post('/api/auth/register-teacher', async (req, res) => {
   }
 
   // 1. ตรวจสอบว่าโรงเรียนที่มีรหัส SMIS นี้ถูกเพิ่มไว้ในระบบหรือยัง
-  const schools = getStoredSchools();
+  const schools = await getSchoolsFromDbOrFile();
   const targetSchool = schools.find((s: any) => s.smisCode === cleanSmis);
   if (!targetSchool) {
     return res.status(404).json({
@@ -1872,13 +1884,37 @@ app.post('/api/auth/register-teacher', async (req, res) => {
     registeredAt: new Date().toISOString(),
   };
 
-  users.push(newUser);
-  await saveStoredUsers(users);
+  try {
+    const conn = await getDirectConnection();
+    try {
+      const [result]: any = await conn.execute(
+        `INSERT INTO users (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', 0)`,
+        [targetSchool.id, cleanCitizenId, cleanCitizenId, newUser.password, cleanFullName,
+          newUser.email, 'teacher', newUser.department, cleanPosition, newUser.phone]
+      );
+      newUser.id = result.insertId;
+    } finally {
+      await conn.end();
+    }
+  } catch (error) {
+    console.error('Teacher registration failed:', error);
+    return res.status(503).json({ success: false, message: 'ไม่สามารถบันทึกคำขอสมัครลง MySQL ได้ กรุณาติดต่อผู้ดูแลระบบ' });
+  }
+
+  try {
+    users.push(newUser);
+    const dir = path.dirname(USERS_DATA_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not update local user cache:', e);
+  }
 
   return res.json({
     success: true,
     message: `สมัครเข้าใช้งานสำเร็จสำหรับคุณครู "${cleanFullName}" ของโรงเรียน ${targetSchool.name} (สถานะ: รอแอดมินโรงเรียนอนุมัติการใช้งาน)`,
-    user: newUser,
+    user: { id: newUser.id, schoolId: newUser.schoolId, status: newUser.status },
     school: targetSchool,
   });
 });
@@ -1931,7 +1967,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   // ตรวจสอบสถานะโรงเรียนว่าเปิดใช้งานอยู่หรือไม่
-  const schools = getStoredSchools();
+  const schools = await getSchoolsFromDbOrFile();
   const userSchool = schools.find((s: any) => s.id === targetUser.schoolId);
 
   if (userSchool && userSchool.isActive === false) {

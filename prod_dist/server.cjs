@@ -142,7 +142,7 @@ async function getDirectConnection(params) {
         user: cfg.user,
         password: cfg.pass || "",
         database: cfg.dbname,
-        connectTimeout: 1200,
+        connectTimeout: 5e3,
         charset: "utf8mb4",
         multipleStatements: true
       });
@@ -986,7 +986,8 @@ async function saveAppData(data, schoolIdParam) {
     console.warn("[AI Studio] MySQL offline \u2014 saved to local storage backup:", err.message);
     return {
       success: true,
-      message: "\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27 (\u0E08\u0E31\u0E14\u0E40\u0E01\u0E47\u0E1A\u0E43\u0E19 Local Storage \u0E2A\u0E33\u0E23\u0E2D\u0E07 \u0E40\u0E19\u0E37\u0E48\u0E2D\u0E07\u0E08\u0E32\u0E01\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E40\u0E0A\u0E37\u0E48\u0E2D\u0E21\u0E15\u0E48\u0E2D MySQL)"
+      message: "\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27 (\u0E08\u0E31\u0E14\u0E40\u0E01\u0E47\u0E1A\u0E43\u0E19 Local Storage \u0E2A\u0E33\u0E23\u0E2D\u0E07 \u0E40\u0E19\u0E37\u0E48\u0E2D\u0E07\u0E08\u0E32\u0E01\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E40\u0E0A\u0E37\u0E48\u0E2D\u0E21\u0E15\u0E48\u0E2D MySQL)",
+      error: err.message
     };
   }
 }
@@ -1871,16 +1872,67 @@ async function updateSuperAdminAccount(data) {
       );
     } else {
       await conn.query(
-        "INSERT INTO `super_admins` (username, password_hash, full_name, email) VALUES (?, ?, ?, ?)",
+        "INSERT INTO `super_admins` (id, username, password_hash, full_name, email) VALUES (1, ?, ?, ?, ?)",
         [newUsername, newPassword, newFullName, newEmail]
       );
     }
+    try {
+      await conn.query('ALTER TABLE `users` MODIFY COLUMN `role` VARCHAR(50) NOT NULL DEFAULT "teacher"');
+      await conn.query("ALTER TABLE `users` MODIFY COLUMN `school_id` INT UNSIGNED DEFAULT NULL");
+      const [uRows] = await conn.query('SELECT id FROM `users` WHERE username = ? OR role = "superadmin" LIMIT 1', [newUsername]);
+      if (uRows && uRows.length > 0) {
+        await conn.query(
+          'UPDATE `users` SET username = ?, password_hash = ?, full_name = ?, email = ?, role = "superadmin", is_password_changed = 1 WHERE id = ?',
+          [newUsername, newPassword, newFullName, newEmail, uRows[0].id]
+        );
+      } else {
+        await conn.query(
+          `INSERT INTO \`users\` (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, is_active, status, is_password_changed)
+           VALUES (NULL, ?, ?, ?, ?, ?, 'superadmin', '\u0E2A\u0E48\u0E27\u0E19\u0E01\u0E25\u0E32\u0E07 \u0E2A\u0E1E\u0E10.', 'Super Admin', 1, 'approved', 1)`,
+          [newUsername, newUsername, newPassword, newFullName, newEmail]
+        );
+      }
+    } catch (uErr) {
+      console.warn("Super Admin sync to users table warning:", uErr);
+    }
     await conn.end();
-    return true;
+    return { success: true, mysqlUpdated: true };
   } catch (e) {
-    console.warn("MySQL update super_admins failed (saved to local config file):", e.message);
-    return true;
+    console.error("MySQL update super_admins failed:", e.message);
+    return { success: false, mysqlUpdated: false, error: e.message };
   }
+}
+async function getSchoolsFromDbOrFile() {
+  try {
+    const conn = await getDirectConnection();
+    const [rows] = await conn.query("SELECT * FROM `schools` ORDER BY id ASC");
+    await conn.end();
+    if (rows && rows.length > 0) {
+      const mapped = rows.map((r) => ({
+        id: r.id,
+        schoolCode: r.school_code,
+        smisCode: r.smis_code,
+        name: r.name,
+        province: r.province || "",
+        educationArea: r.education_area || "",
+        directorName: r.director_name || "",
+        phone: r.phone || "",
+        email: r.email || "",
+        isActive: r.is_active === 1 || r.is_active === true,
+        schoolKey: r.school_key,
+        adminUsername: r.admin_username,
+        adminPasswordPlain: r.admin_password_plain,
+        studentCount: r.student_count || 0,
+        projectCount: r.project_count || 0,
+        totalBudget: r.total_budget || 0,
+        notes: r.notes || ""
+      }));
+      saveStoredSchools(mapped);
+      return mapped;
+    }
+  } catch (e) {
+  }
+  return getStoredSchools();
 }
 async function getStoredUsers() {
   try {
@@ -1981,13 +2033,6 @@ async function getStoredUsers() {
 }
 async function saveStoredUsers(users) {
   try {
-    const dir = import_path2.default.dirname(USERS_DATA_FILE);
-    if (!import_fs2.default.existsSync(dir)) import_fs2.default.mkdirSync(dir, { recursive: true });
-    import_fs2.default.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), "utf-8");
-  } catch (e) {
-    console.error("Error saving users data file:", e);
-  }
-  try {
     const conn = await getDirectConnection();
     for (const u of users) {
       if (!u.username || !u.fullName) continue;
@@ -2052,6 +2097,14 @@ async function saveStoredUsers(users) {
     await conn.end();
   } catch (e) {
     console.error("Error saving users to MySQL:", e);
+    throw e;
+  }
+  try {
+    const dir = import_path2.default.dirname(USERS_DATA_FILE);
+    if (!import_fs2.default.existsSync(dir)) import_fs2.default.mkdirSync(dir, { recursive: true });
+    import_fs2.default.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), "utf-8");
+  } catch (e) {
+    console.warn("Could not update user cache:", e);
   }
 }
 app.get(["/api/database", "/api/app-data"], async (req, res) => {
@@ -2071,7 +2124,7 @@ app.post(["/api/database", "/api/app-data"], async (req, res) => {
     if (result && result.success) {
       return res.json({ success: true, message: result.message || "\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E2A\u0E33\u0E40\u0E23\u0E47\u0E08\u0E41\u0E25\u0E30\u0E0B\u0E34\u0E07\u0E04\u0E4C\u0E01\u0E31\u0E1A\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27" });
     }
-    return res.status(500).json({ success: false, message: "\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E44\u0E14\u0E49" });
+    return res.status(500).json({ success: false, message: result?.error || result?.message || "\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E44\u0E14\u0E49" });
   } catch (e) {
     console.error("Error saving app database:", e);
     return res.status(500).json({ success: false, message: e.message });
@@ -2300,8 +2353,10 @@ app.post("/api/super-admin/schools", async (req, res) => {
   }
   const cleanSmis = String(smisCode).trim();
   const schoolKey = `SCH-${cleanSmis}`;
+  let schools = await getSchoolsFromDbOrFile();
+  const maxSchoolId = schools.reduce((m, s) => Math.max(m, s.id && s.id < 1e6 ? s.id : 0), 0);
   const newSchool = {
-    id: Date.now(),
+    id: maxSchoolId + 1,
     schoolCode: `${cleanSmis}00`,
     smisCode: cleanSmis,
     isActive: true,
@@ -2336,9 +2391,13 @@ app.post("/api/super-admin/schools", async (req, res) => {
     );
     if (result && result.insertId) {
       newSchool.id = result.insertId;
+    } else {
+      const [exRows] = await conn.query("SELECT id FROM `schools` WHERE smis_code = ? LIMIT 1", [cleanSmis]);
+      if (exRows && exRows.length > 0) {
+        newSchool.id = exRows[0].id;
+      }
     }
     await conn.end();
-    let schools = getStoredSchools();
     schools = schools.filter((s) => s.smisCode !== cleanSmis && s.id !== newSchool.id);
     schools.push(newSchool);
     saveStoredSchools(schools);
@@ -2349,10 +2408,10 @@ app.post("/api/super-admin/schools", async (req, res) => {
     });
   } catch (e) {
     console.warn("MySQL insert error, saved to local cache:", e.message);
-    let schools = getStoredSchools();
-    schools = schools.filter((s) => s.smisCode !== cleanSmis && s.id !== newSchool.id);
-    schools.push(newSchool);
-    saveStoredSchools(schools);
+    let schools2 = getStoredSchools();
+    schools2 = schools2.filter((s) => s.smisCode !== cleanSmis && s.id !== newSchool.id);
+    schools2.push(newSchool);
+    saveStoredSchools(schools2);
     return res.json({
       success: true,
       message: `\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E42\u0E23\u0E07\u0E40\u0E23\u0E35\u0E22\u0E19 "${name}" (\u0E23\u0E2B\u0E31\u0E2A SMIS: ${cleanSmis}) \u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27 (Local Storage)`,
@@ -2520,10 +2579,11 @@ app.post("/api/auth/super-admin/change-password", async (req, res) => {
   if (!newPassword || newPassword.trim().length < 3) {
     return res.status(400).json({ success: false, message: "\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19\u0E43\u0E2B\u0E21\u0E48\u0E15\u0E49\u0E2D\u0E07\u0E21\u0E35\u0E04\u0E27\u0E32\u0E21\u0E22\u0E32\u0E27\u0E2D\u0E22\u0E48\u0E32\u0E07\u0E19\u0E49\u0E2D\u0E22 3 \u0E15\u0E31\u0E27\u0E2D\u0E31\u0E01\u0E29\u0E23" });
   }
-  await updateSuperAdminAccount({
+  const result = await updateSuperAdminAccount({
     password: newPassword.trim()
   });
-  return res.json({ success: true, message: "\u0E40\u0E1B\u0E25\u0E35\u0E48\u0E22\u0E19\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19 Super Admin \u0E41\u0E25\u0E30\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E25\u0E07\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27" });
+  const msg = result.mysqlUpdated ? "\u0E40\u0E1B\u0E25\u0E35\u0E48\u0E22\u0E19\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19 Super Admin \u0E41\u0E25\u0E30\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E25\u0E07\u0E15\u0E32\u0E23\u0E32\u0E07 super_admins \u0E41\u0E25\u0E30 users \u0E43\u0E19\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25 MySQL \u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27" : `\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19\u0E25\u0E07\u0E23\u0E30\u0E1A\u0E1A\u0E2A\u0E33\u0E23\u0E2D\u0E07\u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27 (MySQL \u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E40\u0E0A\u0E37\u0E48\u0E2D\u0E21\u0E15\u0E48\u0E2D: ${result.error || "\u0E01\u0E23\u0E38\u0E13\u0E32\u0E15\u0E23\u0E27\u0E08\u0E2A\u0E2D\u0E1A\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E43\u0E19\u0E41\u0E17\u0E47\u0E1A\u0E08\u0E31\u0E14\u0E01\u0E32\u0E23\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25"})`;
+  return res.json({ success: true, message: msg, mysqlUpdated: result.mysqlUpdated });
 });
 app.get("/api/super-admin/account", async (req, res) => {
   try {
@@ -2550,16 +2610,18 @@ app.post("/api/super-admin/account", async (req, res) => {
     if (password && password.trim().length < 3) {
       return res.status(400).json({ success: false, message: "\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19\u0E43\u0E2B\u0E21\u0E48\u0E15\u0E49\u0E2D\u0E07\u0E21\u0E35\u0E2D\u0E22\u0E48\u0E32\u0E07\u0E19\u0E49\u0E2D\u0E22 3 \u0E15\u0E31\u0E27\u0E2D\u0E31\u0E01\u0E29\u0E23" });
     }
-    await updateSuperAdminAccount({
+    const result = await updateSuperAdminAccount({
       username: username ? username.trim() : void 0,
       password: password ? password.trim() : void 0,
       fullName: fullName ? fullName.trim() : void 0,
       email: email !== void 0 ? email.trim() : void 0
     });
     const updated = await getSuperAdminAccount();
+    const msg = result.mysqlUpdated ? "\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E41\u0E25\u0E30\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19 Super Admin \u0E25\u0E07\u0E43\u0E19\u0E15\u0E32\u0E23\u0E32\u0E07 super_admins \u0E41\u0E25\u0E30 users \u0E02\u0E2D\u0E07 MySQL (phpMyAdmin) \u0E2A\u0E33\u0E40\u0E23\u0E47\u0E08\u0E2A\u0E21\u0E1A\u0E39\u0E23\u0E13\u0E4C" : `\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E25\u0E07\u0E23\u0E30\u0E1A\u0E1A\u0E44\u0E1F\u0E25\u0E4C\u0E2A\u0E33\u0E23\u0E2D\u0E07\u0E2A\u0E33\u0E40\u0E23\u0E47\u0E08\u0E41\u0E25\u0E49\u0E27 (MySQL \u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E40\u0E0A\u0E37\u0E48\u0E2D\u0E21\u0E15\u0E48\u0E2D: ${result.error || "\u0E01\u0E23\u0E38\u0E13\u0E32\u0E15\u0E23\u0E27\u0E08\u0E2A\u0E2D\u0E1A\u0E01\u0E32\u0E23\u0E15\u0E31\u0E49\u0E07\u0E04\u0E48\u0E32\u0E43\u0E19\u0E41\u0E17\u0E47\u0E1A\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25"})`;
     return res.json({
       success: true,
-      message: "\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E41\u0E25\u0E30\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19 Super Admin \u0E25\u0E07\u0E43\u0E19\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25 MySQL \u0E2A\u0E33\u0E40\u0E23\u0E47\u0E08\u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27",
+      message: msg,
+      mysqlUpdated: result.mysqlUpdated,
       account: {
         username: updated.username,
         fullName: updated.fullName,
@@ -2571,11 +2633,40 @@ app.post("/api/super-admin/account", async (req, res) => {
     return res.status(500).json({ success: false, message: "\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25 Super Admin \u0E44\u0E14\u0E49: " + err.message });
   }
 });
+app.get("/api/super-admin/school-funding/:schoolId", async (req, res) => {
+  try {
+    const schoolId = Number(req.params.schoolId);
+    const data = await loadAppData(schoolId);
+    const schools = await getSchoolsFromDbOrFile();
+    const school = schools.find((s) => s.id === schoolId || String(s.smisCode) === String(schoolId));
+    const users = await getStoredUsers();
+    const teachers = users.filter(
+      (u) => (u.schoolId === schoolId || u.schoolSmis === school?.smisCode) && u.role !== "superadmin"
+    );
+    return res.json({
+      success: true,
+      school: school || data?.school,
+      allocations: data?.allocations || [],
+      revenues: data?.revenues || [],
+      projects: data?.projects || [],
+      transactions: data?.transactions || [],
+      teachers
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
 app.get("/api/super-admin/users", async (req, res) => {
   try {
     const users = await getStoredUsers();
-    const schools = getStoredSchools();
+    const schools = await getSchoolsFromDbOrFile();
     const schoolMap = /* @__PURE__ */ new Map();
+    schools.forEach((s) => {
+      schoolMap.set(s.id, s);
+      schoolMap.set(String(s.id), s);
+      if (s.smisCode) schoolMap.set(String(s.smisCode), s);
+      if (s.schoolCode) schoolMap.set(String(s.schoolCode), s);
+    });
     schools.forEach((s) => {
       schoolMap.set(s.id, s);
       if (s.smisCode) schoolMap.set(s.smisCode, s);
@@ -2599,14 +2690,26 @@ app.post("/api/super-admin/approve-user", async (req, res) => {
     return res.status(400).json({ success: false, message: "\u0E01\u0E23\u0E38\u0E13\u0E32\u0E23\u0E30\u0E1A\u0E38 userId" });
   }
   const users = await getStoredUsers();
-  const schools = getStoredSchools();
+  const schools = await getSchoolsFromDbOrFile();
   const targetUser = users.find((u) => u.id === Number(userId));
   if (!targetUser) {
     return res.status(404).json({ success: false, message: "\u0E44\u0E21\u0E48\u0E1E\u0E1A\u0E1C\u0E39\u0E49\u0E43\u0E0A\u0E49\u0E07\u0E32\u0E19\u0E17\u0E35\u0E48\u0E23\u0E30\u0E1A\u0E38" });
   }
   if (status === "rejected" || status === "delete") {
+    try {
+      const conn = await getDirectConnection();
+      await conn.query("DELETE FROM users WHERE id = ?", [targetUser.id]);
+      await conn.end();
+    } catch (e) {
+      console.warn("MySQL delete user warning:", e);
+    }
     const remainingUsers = users.filter((u) => u.id !== targetUser.id);
-    await saveStoredUsers(remainingUsers);
+    try {
+      const dir = import_path2.default.dirname(USERS_DATA_FILE);
+      if (!import_fs2.default.existsSync(dir)) import_fs2.default.mkdirSync(dir, { recursive: true });
+      import_fs2.default.writeFileSync(USERS_DATA_FILE, JSON.stringify(remainingUsers, null, 2), "utf-8");
+    } catch (e) {
+    }
     return res.json({ success: true, message: `\u0E25\u0E1A\u0E04\u0E33\u0E02\u0E2D\u0E2A\u0E21\u0E31\u0E04\u0E23\u0E02\u0E2D\u0E07 "${targetUser.fullName}" \u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27` });
   }
   const newStatus = status || "approved";
@@ -2664,7 +2767,7 @@ app.post("/api/auth/register-teacher", async (req, res) => {
   if (!cleanFullName) {
     return res.status(400).json({ success: false, message: "\u0E01\u0E23\u0E38\u0E13\u0E32\u0E23\u0E30\u0E1A\u0E38\u0E0A\u0E37\u0E48\u0E2D-\u0E19\u0E32\u0E21\u0E2A\u0E01\u0E38\u0E25\u0E02\u0E2D\u0E07\u0E04\u0E38\u0E13\u0E04\u0E23\u0E39" });
   }
-  const schools = getStoredSchools();
+  const schools = await getSchoolsFromDbOrFile();
   const targetSchool = schools.find((s) => s.smisCode === cleanSmis);
   if (!targetSchool) {
     return res.status(404).json({
@@ -2699,12 +2802,45 @@ app.post("/api/auth/register-teacher", async (req, res) => {
     // ต้องรอแอดมินของโรงเรียนอนุมัติ
     registeredAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-  users.push(newUser);
-  await saveStoredUsers(users);
+  try {
+    const conn = await getDirectConnection();
+    try {
+      const [result] = await conn.execute(
+        `INSERT INTO users (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', 0)`,
+        [
+          targetSchool.id,
+          cleanCitizenId,
+          cleanCitizenId,
+          newUser.password,
+          cleanFullName,
+          newUser.email,
+          "teacher",
+          newUser.department,
+          cleanPosition,
+          newUser.phone
+        ]
+      );
+      newUser.id = result.insertId;
+    } finally {
+      await conn.end();
+    }
+  } catch (error) {
+    console.error("Teacher registration failed:", error);
+    return res.status(503).json({ success: false, message: "\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E04\u0E33\u0E02\u0E2D\u0E2A\u0E21\u0E31\u0E04\u0E23\u0E25\u0E07 MySQL \u0E44\u0E14\u0E49 \u0E01\u0E23\u0E38\u0E13\u0E32\u0E15\u0E34\u0E14\u0E15\u0E48\u0E2D\u0E1C\u0E39\u0E49\u0E14\u0E39\u0E41\u0E25\u0E23\u0E30\u0E1A\u0E1A" });
+  }
+  try {
+    users.push(newUser);
+    const dir = import_path2.default.dirname(USERS_DATA_FILE);
+    if (!import_fs2.default.existsSync(dir)) import_fs2.default.mkdirSync(dir, { recursive: true });
+    import_fs2.default.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), "utf-8");
+  } catch (e) {
+    console.warn("Could not update local user cache:", e);
+  }
   return res.json({
     success: true,
     message: `\u0E2A\u0E21\u0E31\u0E04\u0E23\u0E40\u0E02\u0E49\u0E32\u0E43\u0E0A\u0E49\u0E07\u0E32\u0E19\u0E2A\u0E33\u0E40\u0E23\u0E47\u0E08\u0E2A\u0E33\u0E2B\u0E23\u0E31\u0E1A\u0E04\u0E38\u0E13\u0E04\u0E23\u0E39 "${cleanFullName}" \u0E02\u0E2D\u0E07\u0E42\u0E23\u0E07\u0E40\u0E23\u0E35\u0E22\u0E19 ${targetSchool.name} (\u0E2A\u0E16\u0E32\u0E19\u0E30: \u0E23\u0E2D\u0E41\u0E2D\u0E14\u0E21\u0E34\u0E19\u0E42\u0E23\u0E07\u0E40\u0E23\u0E35\u0E22\u0E19\u0E2D\u0E19\u0E38\u0E21\u0E31\u0E15\u0E34\u0E01\u0E32\u0E23\u0E43\u0E0A\u0E49\u0E07\u0E32\u0E19)`,
-    user: newUser,
+    user: { id: newUser.id, schoolId: newUser.schoolId, status: newUser.status },
     school: targetSchool
   });
 });
@@ -2745,7 +2881,7 @@ app.post("/api/auth/login", async (req, res) => {
   if (!validPass) {
     return res.status(401).json({ success: false, message: "\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19\u0E44\u0E21\u0E48\u0E16\u0E39\u0E01\u0E15\u0E49\u0E2D\u0E07" });
   }
-  const schools = getStoredSchools();
+  const schools = await getSchoolsFromDbOrFile();
   const userSchool = schools.find((s) => s.id === targetUser.schoolId);
   if (userSchool && userSchool.isActive === false) {
     return res.status(403).json({

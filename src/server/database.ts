@@ -173,7 +173,7 @@ export async function getDirectConnection(params?: Partial<DatabaseConfig>) {
         user: cfg.user,
         password: cfg.pass || '',
         database: cfg.dbname,
-        connectTimeout: 1200,
+        connectTimeout: 5000,
         charset: 'utf8mb4',
         multipleStatements: true,
       });
@@ -1110,6 +1110,7 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
     return {
       success: true,
       message: 'บันทึกข้อมูลเรียบร้อยแล้ว (จัดเก็บใน Local Storage สำรอง เนื่องจากยังไม่ได้เชื่อมต่อ MySQL)',
+      error: err.message,
     };
   }
 }
