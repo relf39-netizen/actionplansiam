@@ -9,8 +9,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 SET NAMES utf8mb4;
 
 -- 0. ตารางผู้ดูแลระบบส่วนกลาง (super_admins)
-DROP TABLE IF EXISTS `super_admins`;
-CREATE TABLE `super_admins` (
+CREATE TABLE IF NOT EXISTS `super_admins` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `username` VARCHAR(50) NOT NULL UNIQUE COMMENT 'ชื่อผู้ใช้งาน Super Admin',
   `password_hash` VARCHAR(255) NOT NULL COMMENT 'รหัสผ่านแฮช',
@@ -22,13 +21,11 @@ CREATE TABLE `super_admins` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางผู้ดูแลระบบส่วนกลาง Super Admin';
 
-INSERT INTO `super_admins` (`id`, `username`, `password_hash`, `full_name`, `email`)
-VALUES (1, 'peyarm', '1-6', 'ผู้ดูแลระบบส่วนกลาง (Super Admin)', 'peyarm@obec.mail.go.th')
-ON DUPLICATE KEY UPDATE username = VALUES(username);
+INSERT IGNORE INTO `super_admins` (`id`, `username`, `password_hash`, `full_name`, `email`)
+VALUES (1, 'peyarm', '1-6', 'ผู้ดูแลระบบส่วนกลาง (Super Admin)', 'peyarm@obec.mail.go.th');
 
 -- 1. ตารางข้อมูลโรงเรียน (schools) - รองรับ Multi-Tenant และรหัสสมัคร SMIS 8 หลัก
-DROP TABLE IF EXISTS `schools`;
-CREATE TABLE `schools` (
+CREATE TABLE IF NOT EXISTS `schools` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_code` VARCHAR(20) NOT NULL COMMENT 'รหัสสถานศึกษา 10 หลัก',
   `smis_code` VARCHAR(8) NOT NULL COMMENT 'รหัสสมัคร SMIS 8 หลัก สำหรับเปิดใช้งาน',
@@ -63,8 +60,7 @@ CREATE TABLE `schools` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางข้อมูลพื้นฐานโรงเรียน Multi-Tenant';
 
 -- 2. ตารางปีงบประมาณ (fiscal_years)
-DROP TABLE IF EXISTS `fiscal_years`;
-CREATE TABLE `fiscal_years` (
+CREATE TABLE IF NOT EXISTS `fiscal_years` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `year` INT UNSIGNED NOT NULL COMMENT 'ปีงบประมาณ พ.ศ.',
@@ -81,8 +77,7 @@ CREATE TABLE `fiscal_years` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางปีงบประมาณ';
 
 -- 3. ตารางผู้ใช้งานระบบ (users)
-DROP TABLE IF EXISTS `users`;
-CREATE TABLE `users` (
+CREATE TABLE IF NOT EXISTS `users` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `username` VARCHAR(100) NOT NULL COMMENT 'ชื่อผู้ใช้สำหรับเข้าสู่ระบบ (เช่น admin หรือ เลขบัตรประชาชน)',
@@ -108,8 +103,7 @@ CREATE TABLE `users` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางผู้ใช้งานและระดับสิทธิ์';
 
 -- 4. ตารางจำนวนนักเรียนแยกชั้น (students)
-DROP TABLE IF EXISTS `students`;
-CREATE TABLE `students` (
+CREATE TABLE IF NOT EXISTS `students` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,
@@ -127,8 +121,7 @@ CREATE TABLE `students` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางจำนวนนักเรียนแยกตามระดับชั้น';
 
 -- 5. ตารางประมาณการรายรับ (revenues)
-DROP TABLE IF EXISTS `revenues`;
-CREATE TABLE `revenues` (
+CREATE TABLE IF NOT EXISTS `revenues` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,
@@ -147,8 +140,7 @@ CREATE TABLE `revenues` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางประมาณการรายรับสถานศึกษา';
 
 -- 6. ตารางการจัดสรรงบประมาณตามฝ่าย/งาน (budget_allocations)
-DROP TABLE IF EXISTS `budget_allocations`;
-CREATE TABLE `budget_allocations` (
+CREATE TABLE IF NOT EXISTS `budget_allocations` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,
@@ -167,8 +159,7 @@ CREATE TABLE `budget_allocations` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางจัดสรรงบประมาณตามฝ่าย';
 
 -- 7. ตารางงบกิจกรรมพัฒนาผู้เรียน (learner_activities)
-DROP TABLE IF EXISTS `learner_activities`;
-CREATE TABLE `learner_activities` (
+CREATE TABLE IF NOT EXISTS `learner_activities` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,
@@ -186,8 +177,7 @@ CREATE TABLE `learner_activities` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางกิจกรรมพัฒนาผู้เรียน';
 
 -- 8. ตารางยุทธศาสตร์ (strategies)
-DROP TABLE IF EXISTS `strategies`;
-CREATE TABLE `strategies` (
+CREATE TABLE IF NOT EXISTS `strategies` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,
@@ -202,8 +192,7 @@ CREATE TABLE `strategies` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางยุทธศาสตร์โรงเรียน';
 
 -- 9. ตารางเป้าประสงค์ (goals)
-DROP TABLE IF EXISTS `goals`;
-CREATE TABLE `goals` (
+CREATE TABLE IF NOT EXISTS `goals` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `strategy_id` INT UNSIGNED NOT NULL,
   `code` VARCHAR(50) NOT NULL,
@@ -215,8 +204,7 @@ CREATE TABLE `goals` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางเป้าประสงค์';
 
 -- 10. ตารางตัวชี้วัด (indicators)
-DROP TABLE IF EXISTS `indicators`;
-CREATE TABLE `indicators` (
+CREATE TABLE IF NOT EXISTS `indicators` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `goal_id` INT UNSIGNED NOT NULL,
   `code` VARCHAR(50) NOT NULL,
@@ -230,8 +218,7 @@ CREATE TABLE `indicators` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางตัวชี้วัดความสำเร็จ';
 
 -- 11. ตารางโครงการ (projects)
-DROP TABLE IF EXISTS `projects`;
-CREATE TABLE `projects` (
+CREATE TABLE IF NOT EXISTS `projects` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,
@@ -279,8 +266,7 @@ CREATE TABLE `projects` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางโครงการตามแผนปฏิบัติการ';
 
 -- 12. ตารางรายละเอียดค่าใช้จ่ายโครงการ (project_expenses)
-DROP TABLE IF EXISTS `project_expenses`;
-CREATE TABLE `project_expenses` (
+CREATE TABLE IF NOT EXISTS `project_expenses` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `project_id` INT UNSIGNED NOT NULL,
   `item_name` VARCHAR(255) NOT NULL COMMENT 'รายการค่าใช้จ่าย',
@@ -296,8 +282,7 @@ CREATE TABLE `project_expenses` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางรายละเอียดค่าใช้จ่ายแต่ละโครงการ';
 
 -- 13. ตารางการเบิกจ่ายงบประมาณ (budget_transactions)
-DROP TABLE IF EXISTS `budget_transactions`;
-CREATE TABLE `budget_transactions` (
+CREATE TABLE IF NOT EXISTS `budget_transactions` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,
@@ -319,8 +304,7 @@ CREATE TABLE `budget_transactions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางบันทึกการเบิกจ่ายเงินงบประมาณ';
 
 -- 14. ตารางแผนปฏิบัติการประจำปีรวม (action_plans)
-DROP TABLE IF EXISTS `action_plans`;
-CREATE TABLE `action_plans` (
+CREATE TABLE IF NOT EXISTS `action_plans` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,

@@ -274,18 +274,33 @@ async function runDatabaseMigration() {
       const sqlContent = import_fs.default.readFileSync(SCHEMA_FILE, "utf-8");
       logs.push(`\u2713 \u0E2D\u0E48\u0E32\u0E19\u0E44\u0E1F\u0E25\u0E4C Schema \u0E08\u0E32\u0E01 database/schema.sql (${Buffer.byteLength(sqlContent)} bytes)`);
       const statements = sqlContent.split(/;\s*$/m).map((s) => s.trim()).filter((s) => s.length > 0 && !s.startsWith("--") && !s.startsWith("/*"));
-      for (const stmt of statements) {
+      let executedCount = 0;
+      let skippedDropCount = 0;
+      for (let stmt of statements) {
+        const cleanUpper = stmt.trim().toUpperCase();
+        if (cleanUpper.startsWith("DROP TABLE") || cleanUpper.startsWith("DROP DATABASE") || cleanUpper.startsWith("TRUNCATE")) {
+          skippedDropCount++;
+          continue;
+        }
+        if (/^CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)/i.test(stmt)) {
+          stmt = stmt.replace(/^CREATE\s+TABLE\s+/i, "CREATE TABLE IF NOT EXISTS ");
+        }
+        if (/^INSERT\s+INTO\s+/i.test(stmt) && !/^INSERT\s+IGNORE\s+INTO\s+/i.test(stmt)) {
+          stmt = stmt.replace(/^INSERT\s+INTO\s+/i, "INSERT IGNORE INTO ");
+        }
         if (stmt.length > 5) {
           try {
             await conn.query(stmt);
+            executedCount++;
           } catch (e) {
-            if (!stmt.toUpperCase().startsWith("DROP TABLE")) {
-              console.warn("Migration warning:", e.message);
-            }
+            console.warn("Migration warning:", e.message);
           }
         }
       }
-      logs.push(`\u2713 \u0E15\u0E34\u0E14\u0E15\u0E31\u0E49\u0E07\u0E41\u0E25\u0E30\u0E2D\u0E31\u0E1B\u0E40\u0E14\u0E15\u0E15\u0E32\u0E23\u0E32\u0E07\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E04\u0E23\u0E1A\u0E16\u0E49\u0E27\u0E19 (${statements.length} statements)`);
+      if (skippedDropCount > 0) {
+        logs.push(`\u{1F6E1}\uFE0F \u0E02\u0E49\u0E32\u0E21\u0E04\u0E33\u0E2A\u0E31\u0E48\u0E07 DROP TABLE \u0E17\u0E31\u0E49\u0E07\u0E2B\u0E21\u0E14 ${skippedDropCount} \u0E04\u0E33\u0E2A\u0E31\u0E48\u0E07 \u0E40\u0E1E\u0E37\u0E48\u0E2D\u0E23\u0E31\u0E01\u0E29\u0E32\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E40\u0E14\u0E34\u0E21`);
+      }
+      logs.push(`\u2713 \u0E15\u0E34\u0E14\u0E15\u0E31\u0E49\u0E07\u0E41\u0E25\u0E30\u0E15\u0E23\u0E27\u0E08\u0E2A\u0E2D\u0E1A\u0E15\u0E32\u0E23\u0E32\u0E07\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E04\u0E23\u0E1A\u0E16\u0E49\u0E27\u0E19 (${executedCount} statements) \u0E42\u0E14\u0E22\u0E23\u0E31\u0E01\u0E29\u0E32\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E40\u0E14\u0E34\u0E21\u0E44\u0E27\u0E49 100%`);
     } else {
       logs.push("\u26A0\uFE0F \u0E44\u0E21\u0E48\u0E1E\u0E1A\u0E44\u0E1F\u0E25\u0E4C schema.sql \u0E01\u0E33\u0E25\u0E31\u0E07\u0E2A\u0E23\u0E49\u0E32\u0E07\u0E15\u0E32\u0E23\u0E32\u0E07\u0E2B\u0E25\u0E31\u0E01\u0E2D\u0E31\u0E15\u0E42\u0E19\u0E21\u0E31\u0E15\u0E34...");
     }

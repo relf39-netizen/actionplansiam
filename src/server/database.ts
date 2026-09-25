@@ -350,19 +350,40 @@ export async function runDatabaseMigration(): Promise<{
         .map((s) => s.trim())
         .filter((s) => s.length > 0 && !s.startsWith('--') && !s.startsWith('/*'));
 
-      for (const stmt of statements) {
+      let executedCount = 0;
+      let skippedDropCount = 0;
+
+      for (let stmt of statements) {
+        // ป้องกันข้อมูลสูญหาย: ข้ามคำสั่ง DROP TABLE, DROP DATABASE, TRUNCATE ทั้งหมดเด็ดขาด
+        const cleanUpper = stmt.trim().toUpperCase();
+        if (cleanUpper.startsWith('DROP TABLE') || cleanUpper.startsWith('DROP DATABASE') || cleanUpper.startsWith('TRUNCATE')) {
+          skippedDropCount++;
+          continue;
+        }
+
+        // หากเป็น CREATE TABLE ให้เปลี่ยนเป็น CREATE TABLE IF NOT EXISTS เสมอ
+        if (/^CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)/i.test(stmt)) {
+          stmt = stmt.replace(/^CREATE\s+TABLE\s+/i, 'CREATE TABLE IF NOT EXISTS ');
+        }
+
+        // สำหรับ INSERT เริ่มต้น เช่น super_admins ให้ใช้ INSERT IGNORE เพื่อไม่ให้ทับข้อมูลเดิม
+        if (/^INSERT\s+INTO\s+/i.test(stmt) && !/^INSERT\s+IGNORE\s+INTO\s+/i.test(stmt)) {
+          stmt = stmt.replace(/^INSERT\s+INTO\s+/i, 'INSERT IGNORE INTO ');
+        }
+
         if (stmt.length > 5) {
           try {
             await conn.query(stmt);
+            executedCount++;
           } catch (e: any) {
-            // ละเว้นคำสั่ง DROP TABLE หรือ warning เล็กน้อย
-            if (!stmt.toUpperCase().startsWith('DROP TABLE')) {
-              console.warn('Migration warning:', e.message);
-            }
+            console.warn('Migration warning:', e.message);
           }
         }
       }
-      logs.push(`✓ ติดตั้งและอัปเดตตารางฐานข้อมูลครบถ้วน (${statements.length} statements)`);
+      if (skippedDropCount > 0) {
+        logs.push(`🛡️ ข้ามคำสั่ง DROP TABLE ทั้งหมด ${skippedDropCount} คำสั่ง เพื่อรักษาข้อมูลเดิม`);
+      }
+      logs.push(`✓ ติดตั้งและตรวจสอบตารางฐานข้อมูลครบถ้วน (${executedCount} statements) โดยรักษาข้อมูลเดิมไว้ 100%`);
     } else {
       logs.push('⚠️ ไม่พบไฟล์ schema.sql กำลังสร้างตารางหลักอัตโนมัติ...');
     }
