@@ -76,7 +76,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [saError, setSaError] = useState<string | null>(null);
   const [saSuccess, setSaSuccess] = useState<string | null>(null);
   const [saLoading, setSaLoading] = useState(false);
-  const [saSource, setSaSource] = useState<'mysql' | 'local_file'>('mysql');
+  const [saSource, setSaSource] = useState<'mysql' | 'local_file' | 'unknown'>('mysql');
 
   // DB Config & Status state
   const [dbConfig, setDbConfig] = useState<DatabaseConfig>({
@@ -122,7 +122,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       const data = await parseSafeJson(res, 'ไม่สามารถดึงข้อมูลโรงเรียนได้');
       if (res.ok && data.success && Array.isArray(data.schools)) {
         setSchools(data.schools);
-      } else {
+      } else if (!res.ok || data.success === false) {
         setFetchError(data.message || 'ไม่สามารถดึงข้อมูลโรงเรียนจากฐานข้อมูล MySQL ได้');
       }
     } catch (e: any) {
@@ -137,7 +137,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       const data = await parseSafeJson(res, 'ไม่สามารถเชื่อมต่อเพื่อดึงรายชื่อผู้ใช้ได้');
       if (res.ok && data.success && Array.isArray(data.users)) {
         setAllUsers(data.users);
-      } else {
+      } else if (!res.ok || data.success === false) {
         setFetchError(data.message || 'ไม่สามารถดึงรายชื่อคุณครู/บุคลากรจาก MySQL ได้');
       }
     } catch (e: any) {

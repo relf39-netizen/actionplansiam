@@ -123,19 +123,85 @@ function getDbPDO($customConfig = null) {
     return null;
 }
 
-// 3. ฟังก์ชันจัดการไฟล์ Config ต่างๆ
+// 3. ฟังก์ชันจัดการไฟล์ Config และฐานข้อมูล MySQL
 function getSuperAdminPath() {
     $dir = __DIR__ . '/config';
     if (!is_dir($dir)) mkdir($dir, 0755, true);
     return $dir . '/super_admin.json';
 }
 
+function ensureSuperAdminsTable($pdo) {
+    if (!$pdo) return;
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `super_admins` (
+            `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `username` VARCHAR(50) NOT NULL UNIQUE,
+            `password_hash` VARCHAR(255) NOT NULL,
+            `full_name` VARCHAR(150) NOT NULL,
+            `email` VARCHAR(150) DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
+
+        $stmt = $pdo->query("SELECT * FROM `super_admins` LIMIT 1");
+        $row = $stmt ? $stmt->fetch(PDO::FETCH_ASSOC) : null;
+        if (!$row) {
+            $local = [
+                'username' => 'peyarm',
+                'password' => '1-6',
+                'fullName' => 'ผู้ดูแลระบบส่วนกลาง (Super Admin)',
+                'email' => 'peyarm@obec.mail.go.th',
+            ];
+            $file = getSuperAdminPath();
+            if (file_exists($file)) {
+                $content = @file_get_contents($file);
+                $d = @json_decode($content, true);
+                if (is_array($d)) $local = array_merge($local, $d);
+            }
+            $ins = $pdo->prepare("INSERT INTO `super_admins` (username, password_hash, full_name, email) VALUES (?, ?, ?, ?)");
+            $ins->execute([
+                $local['username'] ?? 'peyarm',
+                $local['password'] ?? '1-6',
+                $local['fullName'] ?? 'ผู้ดูแลระบบส่วนกลาง (Super Admin)',
+                $local['email'] ?? 'peyarm@obec.mail.go.th'
+            ]);
+        }
+    } catch (Exception $e) {
+        error_log("Failed to ensure super_admins table: " . $e->getMessage());
+    }
+}
+
 function loadSuperAdminData() {
+    $pdo = getDbPDO();
+    if ($pdo) {
+        try {
+            ensureSuperAdminsTable($pdo);
+            $stmt = $pdo->query("SELECT * FROM `super_admins` ORDER BY id ASC LIMIT 1");
+            $row = $stmt ? $stmt->fetch(PDO::FETCH_ASSOC) : null;
+            if ($row) {
+                return [
+                    'username' => $row['username'],
+                    'password' => $row['password_hash'],
+                    'isPasswordChanged' => true,
+                    'fullName' => $row['full_name'],
+                    'email' => $row['email'] ?? '',
+                    'role' => 'superadmin',
+                    'source' => 'mysql',
+                ];
+            }
+        } catch (Exception $e) {
+            error_log("loadSuperAdminData MySQL error: " . $e->getMessage());
+        }
+    }
+
     $file = getSuperAdminPath();
     if (file_exists($file)) {
         $content = file_get_contents($file);
         $data = json_decode($content, true);
-        if (is_array($data)) return $data;
+        if (is_array($data)) {
+            $data['source'] = 'local_file';
+            return $data;
+        }
     }
     return [
         'username' => 'peyarm',
@@ -143,11 +209,39 @@ function loadSuperAdminData() {
         'isPasswordChanged' => false,
         'fullName' => 'ผู้ดูแลระบบส่วนกลาง (Super Admin)',
         'role' => 'superadmin',
+        'source' => 'default',
     ];
 }
 
 function saveSuperAdminData($data) {
     file_put_contents(getSuperAdminPath(), json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    $pdo = getDbPDO();
+    if ($pdo) {
+        try {
+            ensureSuperAdminsTable($pdo);
+            $row = $pdo->query("SELECT id FROM `super_admins` ORDER BY id ASC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                $stmt = $pdo->prepare("UPDATE `super_admins` SET username = ?, password_hash = ?, full_name = ?, email = ? WHERE id = ?");
+                $stmt->execute([
+                    $data['username'] ?? 'peyarm',
+                    $data['password'] ?? '1-6',
+                    $data['fullName'] ?? 'ผู้ดูแลระบบส่วนกลาง (Super Admin)',
+                    $data['email'] ?? 'peyarm@obec.mail.go.th',
+                    $row['id']
+                ]);
+            } else {
+                $stmt = $pdo->prepare("INSERT INTO `super_admins` (id, username, password_hash, full_name, email) VALUES (1, ?, ?, ?, ?)");
+                $stmt->execute([
+                    $data['username'] ?? 'peyarm',
+                    $data['password'] ?? '1-6',
+                    $data['fullName'] ?? 'ผู้ดูแลระบบส่วนกลาง (Super Admin)',
+                    $data['email'] ?? 'peyarm@obec.mail.go.th'
+                ]);
+            }
+        } catch (Exception $e) {
+            error_log("saveSuperAdminData MySQL error: " . $e->getMessage());
+        }
+    }
 }
 
 function getUsersPath() {
@@ -344,35 +438,61 @@ function ensureUsersTableAndAdmins($pdo) {
         if (is_array($allSchools)) {
             foreach ($allSchools as $s) {
                 if (empty($s['id'])) continue;
-                $adminUser = trim($s['admin_username'] ?? ('admin_' . ($s['smis_code'] ?? $s['id'])));
-                if (empty($adminUser)) $adminUser = 'admin';
-                $adminPass = trim($s['admin_password_plain'] ?? '123456');
-                if (empty($adminPass)) $adminPass = '123456';
-                $schoolName = trim($s['name'] ?? ('โรงเรียนรหัส ' . ($s['smis_code'] ?? $s['id'])));
+                try {
+                    $schoolId = intval($s['id']);
+                    $adminPass = trim($s['admin_password_plain'] ?? '123456');
+                    if (empty($adminPass)) $adminPass = '123456';
+                    $schoolName = trim($s['name'] ?? ('โรงเรียนรหัส ' . ($s['smis_code'] ?? $s['id'])));
 
-                $checkUserStmt = $pdo->prepare("SELECT id, password_hash FROM `users` WHERE `school_id` = ? AND (`role` = 'admin' OR `username` = ?) LIMIT 1");
-                $checkUserStmt->execute([$s['id'], $adminUser]);
-                $existingUser = $checkUserStmt->fetch(PDO::FETCH_ASSOC);
+                    // ตรวจสอบว่ามี Admin ในตาราง users สำหรับโรงเรียนนี้แล้วหรือยัง
+                    $checkUserStmt = $pdo->prepare("SELECT id, username, password_hash FROM `users` WHERE `school_id` = ? AND `role` = 'admin' LIMIT 1");
+                    $checkUserStmt->execute([$schoolId]);
+                    $existingUser = $checkUserStmt->fetch(PDO::FETCH_ASSOC);
 
-                if (!$existingUser) {
-                    $insertUserStmt = $pdo->prepare("INSERT INTO `users` 
-                        (`school_id`, `username`, `password_hash`, `full_name`, `citizen_id`, `email`, `role`, `department`, `position`, `phone`, `is_active`, `status`)
-                        VALUES (?, ?, ?, ?, ?, ?, 'admin', 'กลุ่มบริหารงานงบประมาณ', 'เจ้าหน้าที่แผนงานและงบประมาณ', ?, 1, 'approved')");
-                    $insertUserStmt->execute([
-                        $s['id'],
-                        $adminUser,
-                        $adminPass,
-                        "ผู้ดูแลระบบ ({$schoolName})",
-                        $s['smis_code'] ?: $adminUser,
-                        $s['email'] ?? '',
-                        $s['phone'] ?? ''
-                    ]);
-                } else {
-                    // หากมีอยู่แล้วแต่ password_hash ว่าง ให้เติมรหัสผ่านจาก schools
-                    if (empty($existingUser['password_hash'])) {
+                    if (!$existingUser) {
+                        $candidateAdminUser = trim($s['admin_username'] ?? '');
+                        if (empty($candidateAdminUser) || $candidateAdminUser === 'admin') {
+                            $checkTaken = $pdo->prepare("SELECT id, school_id FROM `users` WHERE `username` = ? LIMIT 1");
+                            $checkTaken->execute(['admin']);
+                            $taken = $checkTaken->fetch(PDO::FETCH_ASSOC);
+                            if ($taken && intval($taken['school_id']) !== $schoolId) {
+                                $candidateAdminUser = 'admin_' . ($s['smis_code'] ?: $schoolId);
+                            } else {
+                                $candidateAdminUser = $candidateAdminUser ?: ('admin_' . ($s['smis_code'] ?: $schoolId));
+                            }
+                        }
+
+                        // ตรวจสอบอีกครั้งว่า candidate ชนกับคนอื่นหรือไม่
+                        $checkTaken2 = $pdo->prepare("SELECT id, school_id FROM `users` WHERE `username` = ? LIMIT 1");
+                        $checkTaken2->execute([$candidateAdminUser]);
+                        $taken2 = $checkTaken2->fetch(PDO::FETCH_ASSOC);
+                        if ($taken2 && intval($taken2['school_id']) !== $schoolId) {
+                            $candidateAdminUser = "admin_{$s['smis_code']}_{$schoolId}";
+                        }
+
+                        $insertUserStmt = $pdo->prepare("INSERT INTO `users` 
+                            (`school_id`, `username`, `password_hash`, `full_name`, `citizen_id`, `email`, `role`, `department`, `position`, `phone`, `is_active`, `status`)
+                            VALUES (?, ?, ?, ?, ?, ?, 'admin', 'กลุ่มบริหารงานงบประมาณ', 'เจ้าหน้าที่แผนงานและงบประมาณ', ?, 1, 'approved')");
+                        $insertUserStmt->execute([
+                            $schoolId,
+                            $candidateAdminUser,
+                            $adminPass,
+                            "ผู้ดูแลระบบ ({$schoolName})",
+                            $s['smis_code'] ?: $candidateAdminUser,
+                            $s['email'] ?? '',
+                            $s['phone'] ?? ''
+                        ]);
+
+                        // อัปเดต admin_username ใน schools ให้ตรงกัน
+                        $updSch = $pdo->prepare("UPDATE `schools` SET `admin_username` = ? WHERE `id` = ?");
+                        $updSch->execute([$candidateAdminUser, $schoolId]);
+                    } else if (empty($existingUser['password_hash'])) {
+                        // หากมีอยู่แล้วแต่ password_hash ว่าง ให้เติมรหัสผ่านจาก schools
                         $updStmt = $pdo->prepare("UPDATE `users` SET `password_hash` = ? WHERE `id` = ?");
                         $updStmt->execute([$adminPass, $existingUser['id']]);
                     }
+                } catch (Exception $eSch) {
+                    error_log("Warning sync admin for school {$s['id']}: " . $eSch->getMessage());
                 }
             }
         }
@@ -1713,6 +1833,175 @@ try {
             exit;
         }
 
+        // --- Super Admin Account (MySQL Database) ---
+        case 'super-admin/account': {
+            $pdo = getDbPDO();
+            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                $username = trim($input['username'] ?? 'peyarm');
+                $password = trim($input['password'] ?? '');
+                $fullName = trim($input['fullName'] ?? 'ผู้ดูแลระบบส่วนกลาง (Super Admin)');
+                $email = trim($input['email'] ?? 'peyarm@obec.mail.go.th');
+
+                $superAdmin = loadSuperAdminData();
+                $superAdmin['username'] = $username;
+                if (!empty($password)) {
+                    $superAdmin['password'] = $password;
+                    $superAdmin['isPasswordChanged'] = true;
+                }
+                $superAdmin['fullName'] = $fullName;
+                $superAdmin['email'] = $email;
+                saveSuperAdminData($superAdmin);
+
+                echo json_encode([
+                    'success' => true,
+                    'message' => 'บันทึกข้อมูลและรหัสผ่าน Super Admin ลงในตาราง super_admins ของ MySQL สำเร็จสมบูรณ์',
+                    'account' => [
+                        'username' => $username,
+                        'fullName' => $fullName,
+                        'email' => $email,
+                        'source' => $pdo ? 'mysql' : 'local_file',
+                    ],
+                ]);
+                exit;
+            }
+
+            // GET
+            $superAdmin = loadSuperAdminData();
+            echo json_encode([
+                'success' => true,
+                'account' => [
+                    'username' => $superAdmin['username'] ?? 'peyarm',
+                    'fullName' => $superAdmin['fullName'] ?? 'ผู้ดูแลระบบส่วนกลาง (Super Admin)',
+                    'email' => $superAdmin['email'] ?? 'peyarm@obec.mail.go.th',
+                    'source' => $superAdmin['source'] ?? ($pdo ? 'mysql' : 'local_file'),
+                ],
+            ]);
+            exit;
+        }
+
+        // --- Super Admin Users List (Across all schools) ---
+        case 'super-admin/users': {
+            $users = loadUsersData();
+            $schools = loadSchoolsData();
+            $schoolMap = [];
+            foreach ($schools as $s) {
+                if (!empty($s['id'])) {
+                    $schoolMap[$s['id']] = $s;
+                    $schoolMap[strval($s['id'])] = $s;
+                }
+                if (!empty($s['smisCode'])) $schoolMap[strval($s['smisCode'])] = $s;
+                if (!empty($s['schoolCode'])) $schoolMap[strval($s['schoolCode'])] = $s;
+            }
+
+            $enriched = array_map(function($u) use ($schoolMap) {
+                $sch = $schoolMap[$u['schoolId'] ?? 0] ?? ($schoolMap[strval($u['schoolId'] ?? 0)] ?? ($schoolMap[$u['schoolSmis'] ?? ''] ?? null));
+                $u['schoolName'] = $sch['name'] ?? ('โรงเรียน ID ' . ($u['schoolId'] ?? ''));
+                $u['schoolSmis'] = $sch['smisCode'] ?? ($u['schoolSmis'] ?? '');
+                return $u;
+            }, $users);
+
+            echo json_encode([
+                'success' => true,
+                'users' => array_values($enriched),
+            ]);
+            exit;
+        }
+
+        // --- Super Admin Approve User & Assign Admin ---
+        case 'super-admin/approve-user': {
+            $userId = intval($input['userId'] ?? 0);
+            $role = trim($input['role'] ?? '');
+            $status = trim($input['status'] ?? '');
+
+            if (!$userId) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'message' => 'กรุณาระบุ userId']);
+                exit;
+            }
+
+            $users = loadUsersData();
+            $schools = loadSchoolsData();
+            $targetUser = null;
+            foreach ($users as $u) {
+                if ($u['id'] === $userId) {
+                    $targetUser = $u;
+                    break;
+                }
+            }
+
+            if (!$targetUser) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'ไม่พบผู้ใช้งานที่ระบุ']);
+                exit;
+            }
+
+            $pdo = getDbPDO();
+
+            if ($status === 'rejected' || $status === 'delete') {
+                if ($pdo) {
+                    try {
+                        $del = $pdo->prepare("DELETE FROM `users` WHERE `id` = ?");
+                        $del->execute([$userId]);
+                    } catch (Exception $e) {}
+                }
+                $users = array_values(array_filter($users, function($u) use ($userId) {
+                    return $u['id'] !== $userId;
+                }));
+                saveUsersData($users);
+                echo json_encode([
+                    'success' => true,
+                    'message' => "ลบคำขอสมัครของ \"{$targetUser['fullName']}\" เรียบร้อยแล้ว",
+                ]);
+                exit;
+            }
+
+            $newStatus = !empty($status) ? $status : 'approved';
+            $targetUser['status'] = $newStatus;
+            $targetUser['isActive'] = ($newStatus === 'approved');
+            if (!empty($role) && in_array($role, ['admin', 'director', 'teacher'])) {
+                $targetUser['role'] = $role;
+            }
+
+            if ($targetUser['role'] === 'admin') {
+                foreach ($schools as &$s) {
+                    if ($s['id'] === $targetUser['schoolId']) {
+                        $s['adminTeacherId'] = $targetUser['id'];
+                        $s['adminTeacherName'] = $targetUser['fullName'];
+                        $s['adminUsername'] = $targetUser['username'];
+                    }
+                }
+                saveSchoolsData($schools);
+                if ($pdo) {
+                    try {
+                        $updSch = $pdo->prepare("UPDATE `schools` SET `admin_username` = ? WHERE `id` = ?");
+                        $updSch->execute([$targetUser['username'], $targetUser['schoolId']]);
+                    } catch (Exception $e) {}
+                }
+            }
+
+            foreach ($users as &$u) {
+                if ($u['id'] === $userId) {
+                    $u = $targetUser;
+                    break;
+                }
+            }
+            saveUsersData($users);
+
+            if ($pdo) {
+                try {
+                    $updUser = $pdo->prepare("UPDATE `users` SET `status` = ?, `is_active` = ?, `role` = ? WHERE `id` = ?");
+                    $updUser->execute([$targetUser['status'], $targetUser['isActive'] ? 1 : 0, $targetUser['role'], $userId]);
+                } catch (Exception $e) {}
+            }
+
+            echo json_encode([
+                'success' => true,
+                'message' => "อนุมัติและปรับสถานะผู้ใช้ \"{$targetUser['fullName']}\" เรียบร้อยแล้ว",
+                'user' => $targetUser,
+            ]);
+            exit;
+        }
+
         // --- Super Admin Login & Password ---
         case 'auth/super-admin/login': {
             $username = trim($input['username'] ?? '');
@@ -1756,7 +2045,7 @@ try {
             exit;
         }
 
-        // --- Teacher Registration ---
+        // --- Teacher / Staff Registration ---
         case 'auth/register-teacher': {
             $smisCode = trim($input['smisCode'] ?? '');
             $citizenId = preg_replace('/[^0-9]/', '', $input['citizenId'] ?? '');
@@ -1766,15 +2055,18 @@ try {
             $email = trim($input['email'] ?? '');
 
             if (!preg_match('/^[0-9]{8}$/', $smisCode)) {
+                http_response_code(400);
                 echo json_encode(['success' => false, 'message' => 'รหัสสถานศึกษา SMIS ต้องเป็นตัวเลข 8 หลักพอดี']);
                 exit;
             }
             if (strlen($citizenId) !== 13) {
+                http_response_code(400);
                 echo json_encode(['success' => false, 'message' => 'เลขประจำตัวประชาชนต้องเป็นตัวเลข 13 หลักพอดี']);
                 exit;
             }
             if (empty($fullName)) {
-                echo json_encode(['success' => false, 'message' => 'กรุณาระบุชื่อ-นามสกุลของคุณครู']);
+                http_response_code(400);
+                echo json_encode(['success' => false, 'message' => 'กรุณาระบุชื่อ-นามสกุลของคุณครู/บุคลากร']);
                 exit;
             }
 
@@ -1789,6 +2081,7 @@ try {
             }
 
             if (!$targetSchool) {
+                http_response_code(404);
                 echo json_encode([
                     'success' => false,
                     'message' => "ไม่พบโรงเรียนที่มีรหัส SMIS {$smisCode} ในระบบ กรุณาติดต่อ Super Admin เพื่อเพิ่มโรงเรียนก่อน",
@@ -1796,50 +2089,100 @@ try {
                 exit;
             }
 
-            $users = loadUsersData();
-            foreach ($users as $u) {
-                if (($u['username'] ?? '') === $citizenId || ($u['citizenId'] ?? '') === $citizenId) {
+            $pdo = getDbPDO();
+            if (!$pdo) {
+                http_response_code(503);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'ไม่สามารถเชื่อมต่อฐานข้อมูล MySQL ได้ กรุณาติดต่อผู้ดูแลระบบ',
+                ]);
+                exit;
+            }
+
+            // ตรวจสอบในฐานข้อมูล MySQL จริงว่ามีเลขประจำตัวประชาชนนี้หรือยัง
+            try {
+                ensureUsersTableAndAdmins($pdo);
+                $chkStmt = $pdo->prepare("SELECT id, username, full_name FROM `users` WHERE `citizen_id` = ? OR `username` = ? LIMIT 1");
+                $chkStmt->execute([$citizenId, $citizenId]);
+                $existingDbUser = $chkStmt->fetch(PDO::FETCH_ASSOC);
+                if ($existingDbUser) {
+                    http_response_code(409);
                     echo json_encode([
                         'success' => false,
-                        'message' => 'เลขประจำตัวประชาชนนี้เคยลงทะเบียนในระบบแล้ว กรุณาเข้าสู่ระบบด้วยรหัสผ่านของคุณ',
+                        'message' => "เลขประจำตัวประชาชนนี้ ({$citizenId}) เคยลงทะเบียนในฐานข้อมูล MySQL แล้ว กรุณาเข้าสู่ระบบด้วยรหัสผ่านของคุณ",
                     ]);
                     exit;
                 }
+
+                // กำหนด Role และ ฝ่ายงาน ตามตำแหน่ง (รองรับ ผอ. / รอง ผอ. / ครู)
+                $regRole = 'teacher';
+                $regDept = 'ฝ่ายการสอนและวิชาการ';
+                $isDirector = (mb_strpos($position, 'ผู้อำนวยการ') !== false || $position === 'ผอ.' || $position === 'ผอ') && mb_strpos($position, 'รอง') === false;
+                $isDeputy = mb_strpos($position, 'รองผู้อำนวยการ') !== false || $position === 'รอง ผอ.' || $position === 'รอง ผอ';
+
+                if ($isDirector) {
+                    $regRole = 'director';
+                    $regDept = 'ฝ่ายบริหารสถานศึกษา';
+                } else if ($isDeputy) {
+                    $regRole = 'teacher';
+                    $regDept = 'ฝ่ายบริหารสถานศึกษา';
+                }
+
+                $insertStmt = $pdo->prepare("INSERT INTO `users` 
+                    (`school_id`, `username`, `citizen_id`, `password_hash`, `full_name`, `email`, `role`, `department`, `position`, `phone`, `is_active`, `status`, `is_password_changed`)
+                    VALUES (?, ?, ?, '1-6', ?, ?, ?, ?, ?, ?, 1, 'pending', 0)");
+                $insertStmt->execute([
+                    $targetSchool['id'],
+                    $citizenId,
+                    $citizenId,
+                    $fullName,
+                    $email,
+                    $regRole,
+                    $regDept,
+                    $position,
+                    $phone
+                ]);
+                $newId = intval($pdo->lastInsertId());
+
+                $newUser = [
+                    'id' => $newId,
+                    'username' => $citizenId,
+                    'citizenId' => $citizenId,
+                    'fullName' => $fullName,
+                    'position' => $position,
+                    'department' => $regDept,
+                    'email' => $email,
+                    'phone' => $phone,
+                    'role' => $regRole,
+                    'schoolId' => $targetSchool['id'],
+                    'schoolSmis' => $smisCode,
+                    'password' => '1-6',
+                    'isPasswordChanged' => false,
+                    'status' => 'pending',
+                    'registeredAt' => date('c'),
+                ];
+
+                // อัปเดตแคชไฟล์
+                $users = loadUsersData();
+                $users[] = $newUser;
+                @file_put_contents(getUsersPath(), json_encode($users, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+
+                echo json_encode([
+                    'success' => true,
+                    'message' => "สมัครเข้าใช้งานสำเร็จสำหรับ {$position} \"{$fullName}\" ของโรงเรียน {$targetSchool['name']} (บันทึกลงฐานข้อมูล MySQL เรียบร้อยแล้ว - สถานะ: รอการอนุมัติการใช้งาน)",
+                    'user' => $newUser,
+                    'school' => $targetSchool,
+                ]);
+                exit;
+            } catch (Exception $e) {
+                http_response_code(503);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'ไม่สามารถบันทึกคำขอสมัครลง MySQL ได้: ' . $e->getMessage(),
+                    'error' => $e->getMessage(),
+                ]);
+                exit;
             }
-
-            $maxId = 0;
-            foreach ($users as $u) {
-                if (($u['id'] ?? 0) > $maxId) $maxId = $u['id'];
-            }
-
-            $newUser = [
-                'id' => $maxId + 1,
-                'username' => $citizenId,
-                'citizenId' => $citizenId,
-                'fullName' => $fullName,
-                'position' => $position,
-                'department' => 'ฝ่ายการสอนและวิชาการ',
-                'email' => $email,
-                'phone' => $phone,
-                'role' => 'teacher',
-                'schoolId' => $targetSchool['id'],
-                'schoolSmis' => $smisCode,
-                'password' => '1-6',
-                'isPasswordChanged' => false,
-                'status' => 'pending', // รอแอดมินโรงเรียนอนุมัติ
-                'registeredAt' => date('c'),
-            ];
-
-            $users[] = $newUser;
-            saveUsersData($users);
-
-            echo json_encode([
-                'success' => true,
-                'message' => "สมัครเข้าใช้งานสำเร็จสำหรับคุณครู \"{$fullName}\" ของโรงเรียน {$targetSchool['name']} (สถานะ: รอแอดมินโรงเรียนอนุมัติการใช้งาน)",
-                'user' => $newUser,
-                'school' => $targetSchool,
-            ]);
-            exit;
         }
 
         // --- General Login (Super Admin & School Staff) ---
@@ -2034,6 +2377,26 @@ try {
             exit;
         }
 
+        // --- School Admin Reject Teacher ---
+        case 'school/reject-teacher': {
+            $schoolId = intval($input['schoolId'] ?? 0);
+            $teacherId = intval($input['teacherId'] ?? ($input['userId'] ?? 0));
+            $users = loadUsersData();
+            $pdo = getDbPDO();
+            if ($pdo && $teacherId > 0) {
+                try {
+                    $del = $pdo->prepare("DELETE FROM `users` WHERE `id` = ? AND `school_id` = ?");
+                    $del->execute([$teacherId, $schoolId]);
+                } catch (Exception $e) {}
+            }
+            $users = array_values(array_filter($users, function($u) use ($teacherId) {
+                return $u['id'] !== $teacherId;
+            }));
+            saveUsersData($users);
+            echo json_encode(['success' => true, 'message' => 'ปฏิเสธและลบคำขอสมัครเรียบร้อยแล้ว']);
+            exit;
+        }
+
         // --- Get Users for School ---
         case 'school/users': {
             $schoolId = intval($_GET['schoolId'] ?? ($input['schoolId'] ?? 0));
@@ -2066,20 +2429,31 @@ try {
             if (file_exists($schemaFile)) {
                 $sql = file_get_contents($schemaFile);
                 $queries = array_filter(array_map('trim', explode(';', $sql)));
+                $executed = 0;
+                $skippedDrop = 0;
                 foreach ($queries as $q) {
                     if (empty($q)) continue;
+                    // ป้องกันการลบตาราง: ข้ามคำสั่ง DROP TABLE, DROP DATABASE, TRUNCATE ทั้งหมดเด็ดขาด
+                    if (preg_match('/^(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE)/i', trim($q))) {
+                        $skippedDrop++;
+                        continue;
+                    }
                     try {
                         $pdo->exec($q);
+                        $executed++;
                     } catch (Exception $e) {}
                 }
-                $logs[] = "✓ ติดตั้งและอัปเดตตารางตามโครงสร้าง database/schema.sql เรียบร้อยแล้ว";
+                if ($skippedDrop > 0) {
+                    $logs[] = "🛡️ ข้ามคำสั่ง DROP TABLE ทั้งหมด {$skippedDrop} คำสั่ง เพื่อรักษาข้อมูลเดิม 100%";
+                }
+                $logs[] = "✓ ติดตั้งและตรวจสอบตารางตามโครงสร้าง database/schema.sql เรียบร้อยแล้ว ({$executed} statements)";
             } else {
                 $logs[] = "✓ โครงสร้างฐานข้อมูลพื้นฐานพร้อมใช้งาน";
             }
 
             echo json_encode([
                 'success' => true,
-                'message' => 'Auto-Migration โครงสร้างฐานข้อมูลเสร็จสิ้นเรียบร้อยแล้ว',
+                'message' => 'Auto-Migration โครงสร้างฐานข้อมูลเสร็จสิ้นเรียบร้อยแล้ว โดยรักษาข้อมูลเดิมไว้ครบถ้วน',
                 'logs' => $logs,
             ]);
             exit;
@@ -2305,11 +2679,11 @@ try {
         }
 
         default: {
-            // กรณีเป็น Route อื่นๆ ให้ตอบกลับเป็น JSON สำเร็จ
+            http_response_code(404);
             echo json_encode([
-                'success' => true,
+                'success' => false,
                 'route' => $route,
-                'message' => 'API Bridge ตอบรับคำขอเรียบร้อยแล้ว',
+                'message' => "ไม่พบ Route API: /api/{$route}",
             ]);
             exit;
         }
