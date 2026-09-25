@@ -111,6 +111,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [isSubmittingSchool, setIsSubmittingSchool] = useState(false);
 
+  // Global fetch error banner and manual refresh feedback
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [refreshSuccessMessage, setRefreshSuccessMessage] = useState<string | null>(null);
+
   // Fetch initial schools, users, sa account & db status
   const fetchSchools = async () => {
     try {
@@ -118,36 +122,47 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       const data = await parseSafeJson(res, 'ไม่สามารถดึงข้อมูลโรงเรียนได้');
       if (res.ok && data.success && Array.isArray(data.schools)) {
         setSchools(data.schools);
+      } else {
+        setFetchError(data.message || 'ไม่สามารถดึงข้อมูลโรงเรียนจากฐานข้อมูล MySQL ได้');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error fetching schools:', e);
+      setFetchError(e.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลโรงเรียน');
     }
   };
 
   const fetchUsers = async () => {
     try {
       const res = await fetch('/api/super-admin/users');
-      const data = await parseSafeJson(res);
-      if (data.success && Array.isArray(data.users)) {
+      const data = await parseSafeJson(res, 'ไม่สามารถเชื่อมต่อเพื่อดึงรายชื่อผู้ใช้ได้');
+      if (res.ok && data.success && Array.isArray(data.users)) {
         setAllUsers(data.users);
+      } else {
+        setFetchError(data.message || 'ไม่สามารถดึงรายชื่อคุณครู/บุคลากรจาก MySQL ได้');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error fetching users for super admin:', e);
+      setFetchError(e.message || 'เกิดข้อผิดพลาดในการดึงรายชื่อผู้ใช้งาน');
     }
   };
 
   const fetchSuperAdminAccount = async () => {
     try {
       const res = await fetch('/api/super-admin/account');
-      const data = await parseSafeJson(res);
-      if (data.success && data.account) {
+      const data = await parseSafeJson(res, 'ไม่สามารถเชื่อมต่อ API บัญชี Super Admin ได้');
+      if (res.ok && data.success && data.account) {
         setSaUsername(data.account.username || 'peyarm');
         setSaFullName(data.account.fullName || 'ผู้ดูแลระบบส่วนกลาง (Super Admin)');
         setSaEmail(data.account.email || 'peyarm@obec.mail.go.th');
         setSaSource(data.account.source || 'mysql');
+        setSaError(null);
+      } else {
+        setSaError(data.message || 'ไม่สามารถดึงข้อมูลบัญชี Super Admin จาก MySQL ได้');
+        setSaSource('unknown');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error fetching super admin account:', e);
+      setSaError(e.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลบัญชี Super Admin');
     }
   };
 
@@ -167,6 +182,30 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       }
     } catch (e) {
       console.error('Error fetching db status:', e);
+    }
+  };
+
+  const refreshAllData = async (manualClick = false) => {
+    setLoading(true);
+    if (manualClick) {
+      setFetchError(null);
+      setRefreshSuccessMessage(null);
+    }
+    try {
+      await Promise.all([
+        fetchSchools(),
+        fetchUsers(),
+        fetchSuperAdminAccount(),
+        fetchDbStatus(),
+      ]);
+      if (manualClick) {
+        setRefreshSuccessMessage('ดึงข้อมูลล่าสุดจากฐานข้อมูล MySQL เรียบร้อยแล้ว');
+        setTimeout(() => setRefreshSuccessMessage(null), 4000);
+      }
+    } catch (e: any) {
+      setFetchError(e.message || 'เกิดข้อผิดพลาดในการโหลดข้อมูลจาก MySQL');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -212,12 +251,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     });
   };
 
+  // Re-fetch data whenever tab is opened/switched
   useEffect(() => {
-    setLoading(true);
-    Promise.all([fetchSchools(), fetchUsers(), fetchSuperAdminAccount(), fetchDbStatus()]).finally(() =>
-      setLoading(false)
-    );
-  }, []);
+    refreshAllData(false);
+  }, [activeTab]);
 
   const handleSmisInput = (val: string) => {
     const cleaned = val.replace(/\D/g, '').slice(0, 8);
@@ -534,8 +571,19 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             </div>
           </div>
 
-          {/* Quick profile info & Logout */}
-          <div className="flex items-center gap-3 self-start md:self-auto bg-slate-800/80 p-2 rounded-2xl border border-slate-700">
+          {/* Quick profile info, Refresh & Logout */}
+          <div className="flex items-center gap-2 self-start md:self-auto bg-slate-800/80 p-2 rounded-2xl border border-slate-700">
+            <button
+              type="button"
+              onClick={() => refreshAllData(true)}
+              disabled={loading}
+              className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer border border-blue-500 disabled:opacity-50"
+              title="ดึงข้อมูลล่าสุดจาก MySQL ทันที"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">รีเฟรชข้อมูล</span>
+            </button>
+
             <div className="text-right px-2">
               <div className="text-xs font-bold text-white flex items-center gap-1.5 justify-end">
                 <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
@@ -551,7 +599,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 title="ออกจากระบบ Super Admin"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                <span>ออกจากระบบ</span>
+                <span className="hidden sm:inline">ออกจากระบบ</span>
               </button>
             )}
           </div>
@@ -664,6 +712,57 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
           <span>3. จัดการฐานข้อมูล MySQL & โครงสร้างระบบ</span>
         </button>
       </div>
+
+      {/* Global Fetch Error Notification */}
+      {fetchError && (
+        <div className="p-4 rounded-2xl border border-red-300 bg-red-50 text-red-950 shadow-sm flex items-start justify-between gap-3 animate-fade-in">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-bold text-sm text-red-950">ข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล MySQL</div>
+              <p className="text-xs text-red-800 mt-0.5 font-medium">{fetchError}</p>
+              <p className="text-[11px] text-red-700 mt-1">
+                กรุณาตรวจสอบการตั้งค่าฐานข้อมูลในแท็บ "3. จัดการฐานข้อมูล MySQL & โครงสร้างระบบ" หรือกดปุ่มรีเฟรชข้อมูลอีกครั้ง
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => refreshAllData(true)}
+              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              <span>ลองใหม่อีกครั้ง</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setFetchError(null)}
+              className="text-red-500 hover:text-red-800 p-1 rounded-lg transition-colors cursor-pointer"
+              title="ปิดการแจ้งเตือน"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Refresh Feedback */}
+      {refreshSuccessMessage && (
+        <div className="p-3.5 rounded-2xl border border-emerald-300 bg-emerald-50 text-emerald-950 shadow-sm flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs font-bold text-emerald-900">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{refreshSuccessMessage}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setRefreshSuccessMessage(null)}
+            className="text-emerald-600 hover:text-emerald-900 p-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* TAB 1: SCHOOLS MANAGEMENT (FORM ONLY HAS SMIS 8 DIGITS & SCHOOL NAME) */}
       {activeTab === 'schools' && (

@@ -593,74 +593,70 @@ async function saveAppData(data, schoolIdParam) {
         }
       }
     }
-    if (Array.isArray(data.users)) {
-      if (data.users.length === 0) {
-        await conn.query("DELETE FROM users WHERE school_id = ?", [schoolId]);
-      } else {
-        const keptUserIds = [];
-        for (const u of data.users) {
-          if (!u.username || !u.fullName) continue;
-          const userPass = u.password || u.passwordHash || "123456";
-          if (u.id && u.id > 0) {
-            await conn.query(
-              `INSERT INTO users (id, school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON DUPLICATE KEY UPDATE
-                 username = VALUES(username),
-                 citizen_id = VALUES(citizen_id),
-                 password_hash = VALUES(password_hash),
-                 full_name = VALUES(full_name),
-                 email = VALUES(email),
-                 role = VALUES(role),
-                 department = VALUES(department),
-                 position = VALUES(position),
-                 phone = VALUES(phone),
-                 is_active = VALUES(is_active),
-                 status = VALUES(status),
-                 is_password_changed = VALUES(is_password_changed)`,
-              [
-                u.id,
-                schoolId,
-                u.username,
-                u.citizenId || "",
-                userPass,
-                u.fullName,
-                u.email || "",
-                u.role || "teacher",
-                u.department || "",
-                u.position || "",
-                u.phone || "",
-                u.isActive !== false ? 1 : 0,
-                u.status || "approved",
-                u.isPasswordChanged ? 1 : 0
-              ]
-            );
-            keptUserIds.push(u.id);
-          } else {
-            const [ur] = await conn.query(
-              `INSERT INTO users (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                schoolId,
-                u.username,
-                u.citizenId || "",
-                userPass,
-                u.fullName,
-                u.email || "",
-                u.role || "teacher",
-                u.department || "",
-                u.position || "",
-                u.phone || "",
-                u.isActive !== false ? 1 : 0,
-                u.status || "approved",
-                u.isPasswordChanged ? 1 : 0
-              ]
-            );
-            if (ur.insertId) keptUserIds.push(ur.insertId);
-          }
-        }
-        if (keptUserIds.length > 0) {
-          await conn.query(`DELETE FROM users WHERE school_id = ? AND id NOT IN (${keptUserIds.join(",")})`, [schoolId]);
+    if (Array.isArray(data.users) && data.users.length > 0) {
+      for (const u of data.users) {
+        if (!u.username || !u.fullName) continue;
+        const userPass = u.password || u.passwordHash || "123456";
+        if (u.id && u.id > 0) {
+          await conn.query(
+            `INSERT INTO users (id, school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               username = VALUES(username),
+               citizen_id = VALUES(citizen_id),
+               password_hash = VALUES(password_hash),
+               full_name = VALUES(full_name),
+               email = VALUES(email),
+               role = VALUES(role),
+               department = VALUES(department),
+               position = VALUES(position),
+               phone = VALUES(phone),
+               is_active = VALUES(is_active),
+               status = VALUES(status),
+               is_password_changed = VALUES(is_password_changed)`,
+            [
+              u.id,
+              schoolId,
+              u.username,
+              u.citizenId || "",
+              userPass,
+              u.fullName,
+              u.email || "",
+              u.role || "teacher",
+              u.department || "",
+              u.position || "",
+              u.phone || "",
+              u.isActive !== false ? 1 : 0,
+              u.status || "approved",
+              u.isPasswordChanged ? 1 : 0
+            ]
+          );
+        } else {
+          await conn.query(
+            `INSERT INTO users (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               full_name = VALUES(full_name),
+               email = VALUES(email),
+               phone = VALUES(phone),
+               role = VALUES(role),
+               position = VALUES(position)`,
+            [
+              schoolId,
+              u.username,
+              u.citizenId || "",
+              userPass,
+              u.fullName,
+              u.email || "",
+              u.role || "teacher",
+              u.department || "",
+              u.position || "",
+              u.phone || "",
+              u.isActive !== false ? 1 : 0,
+              u.status || "approved",
+              u.isPasswordChanged ? 1 : 0
+            ]
+          );
         }
       }
     }
@@ -1989,21 +1985,46 @@ async function getStoredUsers() {
       }
     } catch (e) {
     }
-    const [schools] = await conn.query("SELECT id, name, smis_code, admin_username, admin_password_plain, phone, email FROM `schools`");
-    for (const s of schools || []) {
-      if (!s.id) continue;
-      const adminUser = (s.admin_username || `admin_${s.smis_code || s.id}`).trim();
-      const adminPass = (s.admin_password_plain || "123456").trim();
-      const [uRows] = await conn.query('SELECT id, password_hash FROM `users` WHERE school_id = ? AND (username = ? OR role = "admin") LIMIT 1', [s.id, adminUser]);
-      if (!uRows || uRows.length === 0) {
-        await conn.query(
-          `INSERT INTO \`users\` (school_id, username, password_hash, full_name, citizen_id, email, role, department, position, phone, is_active, status, is_password_changed)
-           VALUES (?, ?, ?, ?, ?, ?, 'admin', '\u0E01\u0E25\u0E38\u0E48\u0E21\u0E1A\u0E23\u0E34\u0E2B\u0E32\u0E23\u0E07\u0E32\u0E19\u0E07\u0E1A\u0E1B\u0E23\u0E30\u0E21\u0E32\u0E13', '\u0E40\u0E08\u0E49\u0E32\u0E2B\u0E19\u0E49\u0E32\u0E17\u0E35\u0E48\u0E41\u0E1C\u0E19\u0E07\u0E32\u0E19\u0E41\u0E25\u0E30\u0E07\u0E1A\u0E1B\u0E23\u0E30\u0E21\u0E32\u0E13', ?, 1, 'approved', 0)`,
-          [s.id, adminUser, adminPass, `\u0E1C\u0E39\u0E49\u0E14\u0E39\u0E41\u0E25\u0E23\u0E30\u0E1A\u0E1A (${s.name})`, s.smis_code || adminUser, s.email || "", s.phone || ""]
-        );
-      } else if (!uRows[0].password_hash) {
-        await conn.query("UPDATE `users` SET password_hash = ? WHERE id = ?", [adminPass, uRows[0].id]);
+    try {
+      const [schools] = await conn.query("SELECT id, name, smis_code, admin_username, admin_password_plain, phone, email FROM `schools`");
+      for (const s of schools || []) {
+        if (!s.id) continue;
+        try {
+          const [uRows] = await conn.query(
+            'SELECT id, username, password_hash FROM `users` WHERE school_id = ? AND role = "admin" LIMIT 1',
+            [s.id]
+          );
+          if (!uRows || uRows.length === 0) {
+            let candidateAdminUser = (s.admin_username || "").trim();
+            if (!candidateAdminUser || candidateAdminUser === "admin") {
+              const [taken] = await conn.query("SELECT id, school_id FROM `users` WHERE username = ? LIMIT 1", ["admin"]);
+              if (taken && taken.length > 0 && taken[0].school_id !== s.id) {
+                candidateAdminUser = `admin_${s.smis_code || s.id}`;
+              } else {
+                candidateAdminUser = candidateAdminUser || `admin_${s.smis_code || s.id}`;
+              }
+            }
+            const [alreadyTaken] = await conn.query("SELECT id, school_id FROM `users` WHERE username = ? LIMIT 1", [candidateAdminUser]);
+            if (alreadyTaken && alreadyTaken.length > 0 && alreadyTaken[0].school_id !== s.id) {
+              candidateAdminUser = `admin_${s.smis_code || s.id}_${s.id}`;
+            }
+            const adminPass = (s.admin_password_plain || "123456").trim();
+            await conn.query(
+              `INSERT INTO \`users\` (school_id, username, password_hash, full_name, citizen_id, email, role, department, position, phone, is_active, status, is_password_changed)
+               VALUES (?, ?, ?, ?, ?, ?, 'admin', '\u0E01\u0E25\u0E38\u0E48\u0E21\u0E1A\u0E23\u0E34\u0E2B\u0E32\u0E23\u0E07\u0E32\u0E19\u0E07\u0E1A\u0E1B\u0E23\u0E30\u0E21\u0E32\u0E13', '\u0E40\u0E08\u0E49\u0E32\u0E2B\u0E19\u0E49\u0E32\u0E17\u0E35\u0E48\u0E41\u0E1C\u0E19\u0E07\u0E32\u0E19\u0E41\u0E25\u0E30\u0E07\u0E1A\u0E1B\u0E23\u0E30\u0E21\u0E32\u0E13', ?, 1, 'approved', 0)`,
+              [s.id, candidateAdminUser, adminPass, `\u0E1C\u0E39\u0E49\u0E14\u0E39\u0E41\u0E25\u0E23\u0E30\u0E1A\u0E1A (${s.name})`, s.smis_code || candidateAdminUser, s.email || "", s.phone || ""]
+            );
+            await conn.query("UPDATE `schools` SET admin_username = ? WHERE id = ?", [candidateAdminUser, s.id]);
+          } else if (!uRows[0].password_hash) {
+            const adminPass = (s.admin_password_plain || "123456").trim();
+            await conn.query("UPDATE `users` SET password_hash = ? WHERE id = ?", [adminPass, uRows[0].id]);
+          }
+        } catch (schoolAdminSyncErr) {
+          console.warn(`Warning: Could not sync admin account for school ${s.id} (${s.name}):`, schoolAdminSyncErr);
+        }
       }
+    } catch (schoolsQueryErr) {
+      console.warn("Warning: Could not query schools for admin sync:", schoolsQueryErr);
     }
     const [rows] = await conn.query("SELECT * FROM `users` ORDER BY id ASC");
     await conn.end();
@@ -2025,15 +2046,13 @@ async function getStoredUsers() {
       isPasswordChanged: u.is_password_changed === 1,
       registeredAt: u.created_at
     }));
-    if (dbUsers.length > 0) {
-      try {
-        const dir = import_path2.default.dirname(USERS_DATA_FILE);
-        if (!import_fs2.default.existsSync(dir)) import_fs2.default.mkdirSync(dir, { recursive: true });
-        import_fs2.default.writeFileSync(USERS_DATA_FILE, JSON.stringify(dbUsers, null, 2), "utf-8");
-      } catch (e) {
-      }
-      return dbUsers;
+    try {
+      const dir = import_path2.default.dirname(USERS_DATA_FILE);
+      if (!import_fs2.default.existsSync(dir)) import_fs2.default.mkdirSync(dir, { recursive: true });
+      import_fs2.default.writeFileSync(USERS_DATA_FILE, JSON.stringify(dbUsers, null, 2), "utf-8");
+    } catch (e) {
     }
+    return dbUsers;
   } catch (e) {
     console.error("getStoredUsers MySQL query failed, falling back to local file:", e);
   }
@@ -2504,7 +2523,7 @@ app.post("/api/super-admin/purge-demo", async (req, res) => {
       smisCode: cleanSmis,
       isActive: true,
       schoolKey: `SCH-${cleanSmis}`,
-      adminUsername: "admin",
+      adminUsername: `admin_${cleanSmis}`,
       adminPasswordPlain: "123456",
       name: schoolName.trim(),
       province: province?.trim() || "\u0E01\u0E23\u0E38\u0E07\u0E40\u0E17\u0E1E\u0E21\u0E2B\u0E32\u0E19\u0E04\u0E23",
@@ -2523,8 +2542,8 @@ app.post("/api/super-admin/purge-demo", async (req, res) => {
       const conn = await getDirectConnection();
       const [insertRes] = await conn.query(
         `INSERT INTO \`schools\` (school_code, smis_code, is_active, school_key, admin_username, admin_password_plain, name, province, education_area, director_name, phone, email, notes)
-         VALUES (?, ?, 1, ?, 'admin', '123456', ?, ?, ?, ?, '', '', '\u0E42\u0E23\u0E07\u0E40\u0E23\u0E35\u0E22\u0E19\u0E08\u0E23\u0E34\u0E07')`,
-        [realSchool.schoolCode, realSchool.smisCode, realSchool.schoolKey, realSchool.name, realSchool.province, realSchool.educationArea, realSchool.directorName]
+         VALUES (?, ?, 1, ?, ?, '123456', ?, ?, ?, ?, '', '', '\u0E42\u0E23\u0E07\u0E40\u0E23\u0E35\u0E22\u0E19\u0E08\u0E23\u0E34\u0E07')`,
+        [realSchool.schoolCode, realSchool.smisCode, realSchool.schoolKey, realSchool.adminUsername, realSchool.name, realSchool.province, realSchool.educationArea, realSchool.directorName]
       );
       if (insertRes && insertRes.insertId) {
         newSchoolId = insertRes.insertId;
@@ -2602,18 +2621,46 @@ app.post("/api/auth/super-admin/change-password", async (req, res) => {
 });
 app.get("/api/super-admin/account", async (req, res) => {
   try {
-    const acc = await getSuperAdminAccount();
+    const conn = await getDirectConnection();
+    await ensureSuperAdminTable();
+    const [rows] = await conn.query("SELECT * FROM `super_admins` ORDER BY id ASC LIMIT 1");
+    await conn.end();
+    if (rows && rows.length > 0) {
+      const row = rows[0];
+      return res.json({
+        success: true,
+        account: {
+          username: row.username,
+          fullName: row.full_name,
+          email: row.email || "",
+          source: "mysql"
+        }
+      });
+    }
+    const local = getSuperAdminData();
+    const conn2 = await getDirectConnection();
+    await conn2.query(
+      `INSERT INTO \`super_admins\` (username, password_hash, full_name, email)
+       VALUES (?, ?, ?, ?)`,
+      [local.username || "peyarm", local.password || "1-6", local.fullName || "\u0E1C\u0E39\u0E49\u0E14\u0E39\u0E41\u0E25\u0E23\u0E30\u0E1A\u0E1A\u0E2A\u0E48\u0E27\u0E19\u0E01\u0E25\u0E32\u0E07 (Super Admin)", local.email || "peyarm@obec.mail.go.th"]
+    );
+    await conn2.end();
     return res.json({
       success: true,
       account: {
-        username: acc.username,
-        fullName: acc.fullName,
-        email: acc.email,
-        source: acc.source
+        username: local.username || "peyarm",
+        fullName: local.fullName || "\u0E1C\u0E39\u0E49\u0E14\u0E39\u0E41\u0E25\u0E23\u0E30\u0E1A\u0E1A\u0E2A\u0E48\u0E27\u0E19\u0E01\u0E25\u0E32\u0E07 (Super Admin)",
+        email: local.email || "peyarm@obec.mail.go.th",
+        source: "mysql"
       }
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    console.error("Failed to get super admin account from MySQL:", err);
+    return res.status(500).json({
+      success: false,
+      message: `\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E14\u0E36\u0E07\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E1A\u0E31\u0E0D\u0E0A\u0E35 Super Admin \u0E08\u0E32\u0E01 MySQL \u0E44\u0E14\u0E49: ${err.message}`,
+      error: err.message
+    });
   }
 });
 app.post("/api/super-admin/account", async (req, res) => {
@@ -2673,7 +2720,38 @@ app.get("/api/super-admin/school-funding/:schoolId", async (req, res) => {
 });
 app.get("/api/super-admin/users", async (req, res) => {
   try {
-    const users = await getStoredUsers();
+    let users = [];
+    try {
+      const conn = await getDirectConnection();
+      const [rows] = await conn.query("SELECT * FROM `users` ORDER BY id ASC");
+      await conn.end();
+      users = (rows || []).map((u) => ({
+        id: u.id,
+        schoolId: u.school_id,
+        username: u.username,
+        citizenId: u.citizen_id,
+        password: u.password_hash || "123456",
+        fullName: u.full_name,
+        email: u.email,
+        role: u.role,
+        department: u.department,
+        position: u.position,
+        phone: u.phone,
+        avatar: u.avatar,
+        isActive: u.is_active === 1,
+        status: u.status || "approved",
+        isPasswordChanged: u.is_password_changed === 1,
+        registeredAt: u.created_at
+      }));
+    } catch (mysqlErr) {
+      console.error("MySQL query failed in /api/super-admin/users:", mysqlErr);
+      return res.status(500).json({
+        success: false,
+        message: `\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E14\u0E36\u0E07\u0E23\u0E32\u0E22\u0E0A\u0E37\u0E48\u0E2D\u0E1C\u0E39\u0E49\u0E43\u0E0A\u0E49\u0E07\u0E32\u0E19\u0E08\u0E32\u0E01\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25 MySQL \u0E44\u0E14\u0E49: ${mysqlErr.message}`,
+        error: mysqlErr.message,
+        users: []
+      });
+    }
     const schools = await getSchoolsFromDbOrFile();
     const schoolMap = /* @__PURE__ */ new Map();
     schools.forEach((s) => {
@@ -2681,10 +2759,6 @@ app.get("/api/super-admin/users", async (req, res) => {
       schoolMap.set(String(s.id), s);
       if (s.smisCode) schoolMap.set(String(s.smisCode), s);
       if (s.schoolCode) schoolMap.set(String(s.schoolCode), s);
-    });
-    schools.forEach((s) => {
-      schoolMap.set(s.id, s);
-      if (s.smisCode) schoolMap.set(s.smisCode, s);
     });
     const enriched = users.map((u) => {
       const sch = schoolMap.get(u.schoolId) || (u.schoolSmis ? schoolMap.get(u.schoolSmis) : null);
@@ -2780,7 +2854,7 @@ app.post("/api/auth/register-teacher", async (req, res) => {
     return res.status(400).json({ success: false, message: "\u0E40\u0E25\u0E02\u0E1B\u0E23\u0E30\u0E08\u0E33\u0E15\u0E31\u0E27\u0E1B\u0E23\u0E30\u0E0A\u0E32\u0E0A\u0E19\u0E15\u0E49\u0E2D\u0E07\u0E40\u0E1B\u0E47\u0E19\u0E15\u0E31\u0E27\u0E40\u0E25\u0E02 13 \u0E2B\u0E25\u0E31\u0E01\u0E1E\u0E2D\u0E14\u0E35" });
   }
   if (!cleanFullName) {
-    return res.status(400).json({ success: false, message: "\u0E01\u0E23\u0E38\u0E13\u0E32\u0E23\u0E30\u0E1A\u0E38\u0E0A\u0E37\u0E48\u0E2D-\u0E19\u0E32\u0E21\u0E2A\u0E01\u0E38\u0E25\u0E02\u0E2D\u0E07\u0E04\u0E38\u0E13\u0E04\u0E23\u0E39" });
+    return res.status(400).json({ success: false, message: "\u0E01\u0E23\u0E38\u0E13\u0E32\u0E23\u0E30\u0E1A\u0E38\u0E0A\u0E37\u0E48\u0E2D-\u0E19\u0E32\u0E21\u0E2A\u0E01\u0E38\u0E25\u0E02\u0E2D\u0E07\u0E04\u0E38\u0E13\u0E04\u0E23\u0E39/\u0E1A\u0E38\u0E04\u0E25\u0E32\u0E01\u0E23" });
   }
   const schools = await getSchoolsFromDbOrFile();
   const targetSchool = schools.find((s) => s.smisCode === cleanSmis);
@@ -2790,74 +2864,105 @@ app.post("/api/auth/register-teacher", async (req, res) => {
       message: `\u0E44\u0E21\u0E48\u0E1E\u0E1A\u0E42\u0E23\u0E07\u0E40\u0E23\u0E35\u0E22\u0E19\u0E17\u0E35\u0E48\u0E21\u0E35\u0E23\u0E2B\u0E31\u0E2A SMIS ${cleanSmis} \u0E43\u0E19\u0E23\u0E30\u0E1A\u0E1A \u0E01\u0E23\u0E38\u0E13\u0E32\u0E15\u0E34\u0E14\u0E15\u0E48\u0E2D\u0E1C\u0E39\u0E49\u0E14\u0E39\u0E41\u0E25\u0E23\u0E30\u0E1A\u0E1A\u0E2A\u0E48\u0E27\u0E19\u0E01\u0E25\u0E32\u0E07 (Super Admin) \u0E40\u0E1E\u0E37\u0E48\u0E2D\u0E40\u0E1E\u0E34\u0E48\u0E21\u0E42\u0E23\u0E07\u0E40\u0E23\u0E35\u0E22\u0E19\u0E01\u0E48\u0E2D\u0E19`
     });
   }
-  const users = await getStoredUsers();
-  const existingUser = users.find((u) => u.username === cleanCitizenId || u.citizenId === cleanCitizenId);
-  if (existingUser) {
-    return res.status(409).json({
+  let conn = null;
+  try {
+    conn = await getDirectConnection();
+  } catch (connErr) {
+    console.error("MySQL connection failed during teacher registration:", connErr);
+    return res.status(503).json({
       success: false,
-      message: "\u0E40\u0E25\u0E02\u0E1B\u0E23\u0E30\u0E08\u0E33\u0E15\u0E31\u0E27\u0E1B\u0E23\u0E30\u0E0A\u0E32\u0E0A\u0E19\u0E19\u0E35\u0E49\u0E40\u0E04\u0E22\u0E25\u0E07\u0E17\u0E30\u0E40\u0E1A\u0E35\u0E22\u0E19\u0E44\u0E27\u0E49\u0E41\u0E25\u0E49\u0E27 \u0E01\u0E23\u0E38\u0E13\u0E32\u0E40\u0E02\u0E49\u0E32\u0E2A\u0E39\u0E48\u0E23\u0E30\u0E1A\u0E1A\u0E14\u0E49\u0E27\u0E22\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19\u0E02\u0E2D\u0E07\u0E04\u0E38\u0E13"
+      message: `\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E40\u0E0A\u0E37\u0E48\u0E2D\u0E21\u0E15\u0E48\u0E2D\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25 MySQL \u0E44\u0E14\u0E49: ${connErr.message || "\u0E01\u0E23\u0E38\u0E13\u0E32\u0E15\u0E23\u0E27\u0E08\u0E2A\u0E2D\u0E1A\u0E01\u0E32\u0E23\u0E15\u0E31\u0E49\u0E07\u0E04\u0E48\u0E32\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25"}`,
+      error: connErr.message
     });
   }
-  const maxId = users.reduce((max, u) => Math.max(max, u.id || 0), 0);
-  const newUser = {
-    id: maxId + 1,
-    username: cleanCitizenId,
-    citizenId: cleanCitizenId,
-    fullName: cleanFullName,
-    position: cleanPosition,
-    department: "\u0E1D\u0E48\u0E32\u0E22\u0E01\u0E32\u0E23\u0E2A\u0E2D\u0E19\u0E41\u0E25\u0E30\u0E27\u0E34\u0E0A\u0E32\u0E01\u0E32\u0E23",
-    email: email?.trim() || "",
-    phone: phone?.trim() || "",
-    role: "teacher",
-    schoolId: targetSchool.id,
-    schoolSmis: cleanSmis,
-    password: "1-6",
-    isPasswordChanged: false,
-    status: "pending",
-    // ต้องรอแอดมินของโรงเรียนอนุมัติ
-    registeredAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
   try {
-    const conn = await getDirectConnection();
-    try {
-      const [result] = await conn.execute(
-        `INSERT INTO users (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', 0)`,
-        [
-          targetSchool.id,
-          cleanCitizenId,
-          cleanCitizenId,
-          newUser.password,
-          cleanFullName,
-          newUser.email,
-          "teacher",
-          newUser.department,
-          cleanPosition,
-          newUser.phone
-        ]
-      );
-      newUser.id = result.insertId;
-    } finally {
+    const [existingDbUsers] = await conn.query(
+      "SELECT id, username, citizen_id, full_name FROM `users` WHERE citizen_id = ? OR username = ? LIMIT 1",
+      [cleanCitizenId, cleanCitizenId]
+    );
+    if (existingDbUsers && existingDbUsers.length > 0) {
       await conn.end();
+      return res.status(409).json({
+        success: false,
+        message: `\u0E40\u0E25\u0E02\u0E1B\u0E23\u0E30\u0E08\u0E33\u0E15\u0E31\u0E27\u0E1B\u0E23\u0E30\u0E0A\u0E32\u0E0A\u0E19\u0E19\u0E35\u0E49 (${cleanCitizenId}) \u0E40\u0E04\u0E22\u0E25\u0E07\u0E17\u0E30\u0E40\u0E1A\u0E35\u0E22\u0E19\u0E44\u0E27\u0E49\u0E43\u0E19\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25 MySQL \u0E41\u0E25\u0E49\u0E27 \u0E01\u0E23\u0E38\u0E13\u0E32\u0E40\u0E02\u0E49\u0E32\u0E2A\u0E39\u0E48\u0E23\u0E30\u0E1A\u0E1A\u0E14\u0E49\u0E27\u0E22\u0E23\u0E2B\u0E31\u0E2A\u0E1C\u0E48\u0E32\u0E19\u0E02\u0E2D\u0E07\u0E04\u0E38\u0E13`
+      });
     }
+    let regRole = "teacher";
+    let regDept = "\u0E1D\u0E48\u0E32\u0E22\u0E01\u0E32\u0E23\u0E2A\u0E2D\u0E19\u0E41\u0E25\u0E30\u0E27\u0E34\u0E0A\u0E32\u0E01\u0E32\u0E23";
+    const isDirector = (cleanPosition.includes("\u0E1C\u0E39\u0E49\u0E2D\u0E33\u0E19\u0E27\u0E22\u0E01\u0E32\u0E23") || cleanPosition === "\u0E1C\u0E2D." || cleanPosition === "\u0E1C\u0E2D") && !cleanPosition.includes("\u0E23\u0E2D\u0E07");
+    const isDeputyDirector = cleanPosition.includes("\u0E23\u0E2D\u0E07\u0E1C\u0E39\u0E49\u0E2D\u0E33\u0E19\u0E27\u0E22\u0E01\u0E32\u0E23") || cleanPosition === "\u0E23\u0E2D\u0E07 \u0E1C\u0E2D." || cleanPosition === "\u0E23\u0E2D\u0E07 \u0E1C\u0E2D";
+    if (isDirector) {
+      regRole = "director";
+      regDept = "\u0E1D\u0E48\u0E32\u0E22\u0E1A\u0E23\u0E34\u0E2B\u0E32\u0E23\u0E2A\u0E16\u0E32\u0E19\u0E28\u0E36\u0E01\u0E29\u0E32";
+    } else if (isDeputyDirector) {
+      regRole = "teacher";
+      regDept = "\u0E1D\u0E48\u0E32\u0E22\u0E1A\u0E23\u0E34\u0E2B\u0E32\u0E23\u0E2A\u0E16\u0E32\u0E19\u0E28\u0E36\u0E01\u0E29\u0E32";
+    }
+    const defaultPass = "1-6";
+    const [insertResult] = await conn.execute(
+      `INSERT INTO \`users\` (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', 0)`,
+      [
+        targetSchool.id,
+        cleanCitizenId,
+        cleanCitizenId,
+        defaultPass,
+        cleanFullName,
+        email?.trim() || "",
+        regRole,
+        regDept,
+        cleanPosition,
+        phone?.trim() || ""
+      ]
+    );
+    const insertedId = insertResult.insertId;
+    await conn.end();
+    const newUser = {
+      id: insertedId,
+      username: cleanCitizenId,
+      citizenId: cleanCitizenId,
+      fullName: cleanFullName,
+      position: cleanPosition,
+      department: regDept,
+      email: email?.trim() || "",
+      phone: phone?.trim() || "",
+      role: regRole,
+      schoolId: targetSchool.id,
+      schoolSmis: cleanSmis,
+      password: defaultPass,
+      isPasswordChanged: false,
+      status: "pending",
+      registeredAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    try {
+      const users = await getStoredUsers();
+      users.push(newUser);
+      const dir = import_path2.default.dirname(USERS_DATA_FILE);
+      if (!import_fs2.default.existsSync(dir)) import_fs2.default.mkdirSync(dir, { recursive: true });
+      import_fs2.default.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), "utf-8");
+    } catch (e) {
+      console.warn("Could not update local user cache file:", e);
+    }
+    return res.json({
+      success: true,
+      message: `\u0E2A\u0E21\u0E31\u0E04\u0E23\u0E40\u0E02\u0E49\u0E32\u0E43\u0E0A\u0E49\u0E07\u0E32\u0E19\u0E2A\u0E33\u0E40\u0E23\u0E47\u0E08\u0E2A\u0E33\u0E2B\u0E23\u0E31\u0E1A ${cleanPosition} "${cleanFullName}" \u0E02\u0E2D\u0E07\u0E42\u0E23\u0E07\u0E40\u0E23\u0E35\u0E22\u0E19 ${targetSchool.name} (\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E25\u0E07\u0E10\u0E32\u0E19\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25 MySQL \u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27 - \u0E2A\u0E16\u0E32\u0E19\u0E30: \u0E23\u0E2D\u0E01\u0E32\u0E23\u0E2D\u0E19\u0E38\u0E21\u0E31\u0E15\u0E34\u0E01\u0E32\u0E23\u0E43\u0E0A\u0E49\u0E07\u0E32\u0E19)`,
+      user: { id: newUser.id, schoolId: newUser.schoolId, status: newUser.status },
+      school: targetSchool
+    });
   } catch (error) {
-    console.error("Teacher registration failed:", error);
-    return res.status(503).json({ success: false, message: "\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E04\u0E33\u0E02\u0E2D\u0E2A\u0E21\u0E31\u0E04\u0E23\u0E25\u0E07 MySQL \u0E44\u0E14\u0E49 \u0E01\u0E23\u0E38\u0E13\u0E32\u0E15\u0E34\u0E14\u0E15\u0E48\u0E2D\u0E1C\u0E39\u0E49\u0E14\u0E39\u0E41\u0E25\u0E23\u0E30\u0E1A\u0E1A" });
+    if (conn) {
+      try {
+        await conn.end();
+      } catch (e) {
+      }
+    }
+    console.error("Teacher registration MySQL insert error:", error);
+    return res.status(503).json({
+      success: false,
+      message: `\u0E44\u0E21\u0E48\u0E2A\u0E32\u0E21\u0E32\u0E23\u0E16\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E04\u0E33\u0E02\u0E2D\u0E2A\u0E21\u0E31\u0E04\u0E23\u0E25\u0E07 MySQL \u0E44\u0E14\u0E49: ${error.message || "\u0E01\u0E23\u0E38\u0E13\u0E32\u0E15\u0E34\u0E14\u0E15\u0E48\u0E2D\u0E1C\u0E39\u0E49\u0E14\u0E39\u0E41\u0E25\u0E23\u0E30\u0E1A\u0E1A"}`,
+      error: error.message
+    });
   }
-  try {
-    users.push(newUser);
-    const dir = import_path2.default.dirname(USERS_DATA_FILE);
-    if (!import_fs2.default.existsSync(dir)) import_fs2.default.mkdirSync(dir, { recursive: true });
-    import_fs2.default.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), "utf-8");
-  } catch (e) {
-    console.warn("Could not update local user cache:", e);
-  }
-  return res.json({
-    success: true,
-    message: `\u0E2A\u0E21\u0E31\u0E04\u0E23\u0E40\u0E02\u0E49\u0E32\u0E43\u0E0A\u0E49\u0E07\u0E32\u0E19\u0E2A\u0E33\u0E40\u0E23\u0E47\u0E08\u0E2A\u0E33\u0E2B\u0E23\u0E31\u0E1A\u0E04\u0E38\u0E13\u0E04\u0E23\u0E39 "${cleanFullName}" \u0E02\u0E2D\u0E07\u0E42\u0E23\u0E07\u0E40\u0E23\u0E35\u0E22\u0E19 ${targetSchool.name} (\u0E2A\u0E16\u0E32\u0E19\u0E30: \u0E23\u0E2D\u0E41\u0E2D\u0E14\u0E21\u0E34\u0E19\u0E42\u0E23\u0E07\u0E40\u0E23\u0E35\u0E22\u0E19\u0E2D\u0E19\u0E38\u0E21\u0E31\u0E15\u0E34\u0E01\u0E32\u0E23\u0E43\u0E0A\u0E49\u0E07\u0E32\u0E19)`,
-    user: { id: newUser.id, schoolId: newUser.schoolId, status: newUser.status },
-    school: targetSchool
-  });
 });
 app.post("/api/auth/login", async (req, res) => {
   const { username, password } = req.body || {};

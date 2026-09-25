@@ -936,22 +936,55 @@ async function getStoredUsers(): Promise<any[]> {
       }
     } catch (e) {}
 
-    // Auto-sync missing Admins from schools table to users table
-    const [schools]: any = await conn.query('SELECT id, name, smis_code, admin_username, admin_password_plain, phone, email FROM `schools`');
-    for (const s of (schools || [])) {
-      if (!s.id) continue;
-      const adminUser = (s.admin_username || `admin_${s.smis_code || s.id}`).trim();
-      const adminPass = (s.admin_password_plain || '123456').trim();
-      const [uRows]: any = await conn.query('SELECT id, password_hash FROM `users` WHERE school_id = ? AND (username = ? OR role = "admin") LIMIT 1', [s.id, adminUser]);
-      if (!uRows || uRows.length === 0) {
-        await conn.query(
-          `INSERT INTO \`users\` (school_id, username, password_hash, full_name, citizen_id, email, role, department, position, phone, is_active, status, is_password_changed)
-           VALUES (?, ?, ?, ?, ?, ?, 'admin', 'กลุ่มบริหารงานงบประมาณ', 'เจ้าหน้าที่แผนงานและงบประมาณ', ?, 1, 'approved', 0)`,
-          [s.id, adminUser, adminPass, `ผู้ดูแลระบบ (${s.name})`, s.smis_code || adminUser, s.email || '', s.phone || '']
-        );
-      } else if (!uRows[0].password_hash) {
-        await conn.query('UPDATE `users` SET password_hash = ? WHERE id = ?', [adminPass, uRows[0].id]);
+    // Auto-sync missing Admins from schools table to users table (Prevent duplicate admin username collisions)
+    try {
+      const [schools]: any = await conn.query('SELECT id, name, smis_code, admin_username, admin_password_plain, phone, email FROM `schools`');
+      for (const s of (schools || [])) {
+        if (!s.id) continue;
+        try {
+          // Check if an admin user already exists for this school
+          const [uRows]: any = await conn.query(
+            'SELECT id, username, password_hash FROM `users` WHERE school_id = ? AND role = "admin" LIMIT 1',
+            [s.id]
+          );
+
+          if (!uRows || uRows.length === 0) {
+            // Find a unique admin username that does not collide with another school
+            let candidateAdminUser = (s.admin_username || '').trim();
+            if (!candidateAdminUser || candidateAdminUser === 'admin') {
+              const [taken]: any = await conn.query('SELECT id, school_id FROM `users` WHERE username = ? LIMIT 1', ['admin']);
+              if (taken && taken.length > 0 && taken[0].school_id !== s.id) {
+                candidateAdminUser = `admin_${s.smis_code || s.id}`;
+              } else {
+                candidateAdminUser = candidateAdminUser || `admin_${s.smis_code || s.id}`;
+              }
+            }
+
+            // Ensure candidate username is not taken by another user
+            const [alreadyTaken]: any = await conn.query('SELECT id, school_id FROM `users` WHERE username = ? LIMIT 1', [candidateAdminUser]);
+            if (alreadyTaken && alreadyTaken.length > 0 && alreadyTaken[0].school_id !== s.id) {
+              candidateAdminUser = `admin_${s.smis_code || s.id}_${s.id}`;
+            }
+
+            const adminPass = (s.admin_password_plain || '123456').trim();
+            await conn.query(
+              `INSERT INTO \`users\` (school_id, username, password_hash, full_name, citizen_id, email, role, department, position, phone, is_active, status, is_password_changed)
+               VALUES (?, ?, ?, ?, ?, ?, 'admin', 'กลุ่มบริหารงานงบประมาณ', 'เจ้าหน้าที่แผนงานและงบประมาณ', ?, 1, 'approved', 0)`,
+              [s.id, candidateAdminUser, adminPass, `ผู้ดูแลระบบ (${s.name})`, s.smis_code || candidateAdminUser, s.email || '', s.phone || '']
+            );
+
+            // Update school's admin_username to match unique username
+            await conn.query('UPDATE `schools` SET admin_username = ? WHERE id = ?', [candidateAdminUser, s.id]);
+          } else if (!uRows[0].password_hash) {
+            const adminPass = (s.admin_password_plain || '123456').trim();
+            await conn.query('UPDATE `users` SET password_hash = ? WHERE id = ?', [adminPass, uRows[0].id]);
+          }
+        } catch (schoolAdminSyncErr) {
+          console.warn(`Warning: Could not sync admin account for school ${s.id} (${s.name}):`, schoolAdminSyncErr);
+        }
       }
+    } catch (schoolsQueryErr) {
+      console.warn('Warning: Could not query schools for admin sync:', schoolsQueryErr);
     }
 
     const [rows]: any = await conn.query('SELECT * FROM `users` ORDER BY id ASC');
@@ -976,15 +1009,14 @@ async function getStoredUsers(): Promise<any[]> {
       registeredAt: u.created_at,
     }));
 
-    if (dbUsers.length > 0) {
-      // Sync backup cache file
-      try {
-        const dir = path.dirname(USERS_DATA_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(USERS_DATA_FILE, JSON.stringify(dbUsers, null, 2), 'utf-8');
-      } catch (e) {}
-      return dbUsers;
-    }
+    // Sync backup cache file
+    try {
+      const dir = path.dirname(USERS_DATA_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(USERS_DATA_FILE, JSON.stringify(dbUsers, null, 2), 'utf-8');
+    } catch (e) {}
+
+    return dbUsers;
   } catch (e) {
     console.error('getStoredUsers MySQL query failed, falling back to local file:', e);
   }
@@ -1515,7 +1547,7 @@ app.post('/api/super-admin/purge-demo', async (req, res) => {
       smisCode: cleanSmis,
       isActive: true,
       schoolKey: `SCH-${cleanSmis}`,
-      adminUsername: 'admin',
+      adminUsername: `admin_${cleanSmis}`,
       adminPasswordPlain: '123456',
       name: schoolName.trim(),
       province: province?.trim() || 'กรุงเทพมหานคร',
@@ -1535,8 +1567,8 @@ app.post('/api/super-admin/purge-demo', async (req, res) => {
       const conn = await getDirectConnection();
       const [insertRes]: any = await conn.query(
         `INSERT INTO \`schools\` (school_code, smis_code, is_active, school_key, admin_username, admin_password_plain, name, province, education_area, director_name, phone, email, notes)
-         VALUES (?, ?, 1, ?, 'admin', '123456', ?, ?, ?, ?, '', '', 'โรงเรียนจริง')`,
-        [realSchool.schoolCode, realSchool.smisCode, realSchool.schoolKey, realSchool.name, realSchool.province, realSchool.educationArea, realSchool.directorName]
+         VALUES (?, ?, 1, ?, ?, '123456', ?, ?, ?, ?, '', '', 'โรงเรียนจริง')`,
+        [realSchool.schoolCode, realSchool.smisCode, realSchool.schoolKey, realSchool.adminUsername, realSchool.name, realSchool.province, realSchool.educationArea, realSchool.directorName]
       );
       if (insertRes && insertRes.insertId) {
         newSchoolId = insertRes.insertId;
@@ -1635,18 +1667,50 @@ app.post('/api/auth/super-admin/change-password', async (req, res) => {
 // --- SUPER ADMIN ACCOUNT MANAGEMENT (MySQL Database) ---
 app.get('/api/super-admin/account', async (req, res) => {
   try {
-    const acc = await getSuperAdminAccount();
+    const conn = await getDirectConnection();
+    await ensureSuperAdminTable();
+    const [rows]: any = await conn.query('SELECT * FROM `super_admins` ORDER BY id ASC LIMIT 1');
+    await conn.end();
+
+    if (rows && rows.length > 0) {
+      const row = rows[0];
+      return res.json({
+        success: true,
+        account: {
+          username: row.username,
+          fullName: row.full_name,
+          email: row.email || '',
+          source: 'mysql',
+        },
+      });
+    }
+
+    // If super_admins table in MySQL is empty, initialize it directly in MySQL
+    const local = getSuperAdminData();
+    const conn2 = await getDirectConnection();
+    await conn2.query(
+      `INSERT INTO \`super_admins\` (username, password_hash, full_name, email)
+       VALUES (?, ?, ?, ?)`,
+      [local.username || 'peyarm', local.password || '1-6', local.fullName || 'ผู้ดูแลระบบส่วนกลาง (Super Admin)', local.email || 'peyarm@obec.mail.go.th']
+    );
+    await conn2.end();
+
     return res.json({
       success: true,
       account: {
-        username: acc.username,
-        fullName: acc.fullName,
-        email: acc.email,
-        source: acc.source,
+        username: local.username || 'peyarm',
+        fullName: local.fullName || 'ผู้ดูแลระบบส่วนกลาง (Super Admin)',
+        email: local.email || 'peyarm@obec.mail.go.th',
+        source: 'mysql',
       },
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message });
+    console.error('Failed to get super admin account from MySQL:', err);
+    return res.status(500).json({
+      success: false,
+      message: `ไม่สามารถดึงข้อมูลบัญชี Super Admin จาก MySQL ได้: ${err.message}`,
+      error: err.message,
+    });
   }
 });
 
@@ -1714,10 +1778,42 @@ app.get('/api/super-admin/school-funding/:schoolId', async (req, res) => {
   }
 });
 
-// --- SUPER ADMIN USERS LIST (Across all schools) ---
+// --- SUPER ADMIN USERS LIST (Across all schools - Queries MySQL authoritatively) ---
 app.get('/api/super-admin/users', async (req, res) => {
   try {
-    const users = await getStoredUsers();
+    let users: any[] = [];
+    try {
+      const conn = await getDirectConnection();
+      const [rows]: any = await conn.query('SELECT * FROM `users` ORDER BY id ASC');
+      await conn.end();
+      users = (rows || []).map((u: any) => ({
+        id: u.id,
+        schoolId: u.school_id,
+        username: u.username,
+        citizenId: u.citizen_id,
+        password: u.password_hash || '123456',
+        fullName: u.full_name,
+        email: u.email,
+        role: u.role,
+        department: u.department,
+        position: u.position,
+        phone: u.phone,
+        avatar: u.avatar,
+        isActive: u.is_active === 1,
+        status: u.status || 'approved',
+        isPasswordChanged: u.is_password_changed === 1,
+        registeredAt: u.created_at,
+      }));
+    } catch (mysqlErr: any) {
+      console.error('MySQL query failed in /api/super-admin/users:', mysqlErr);
+      return res.status(500).json({
+        success: false,
+        message: `ไม่สามารถดึงรายชื่อผู้ใช้งานจากฐานข้อมูล MySQL ได้: ${mysqlErr.message}`,
+        error: mysqlErr.message,
+        users: [],
+      });
+    }
+
     const schools = await getSchoolsFromDbOrFile();
     const schoolMap = new Map<any, any>();
     schools.forEach((s: any) => {
@@ -1725,10 +1821,6 @@ app.get('/api/super-admin/users', async (req, res) => {
       schoolMap.set(String(s.id), s);
       if (s.smisCode) schoolMap.set(String(s.smisCode), s);
       if (s.schoolCode) schoolMap.set(String(s.schoolCode), s);
-    });
-    schools.forEach((s: any) => {
-      schoolMap.set(s.id, s);
-      if (s.smisCode) schoolMap.set(s.smisCode, s);
     });
 
     const enriched = users.map((u: any) => {
@@ -1841,7 +1933,7 @@ app.post('/api/auth/register-teacher', async (req, res) => {
     return res.status(400).json({ success: false, message: 'เลขประจำตัวประชาชนต้องเป็นตัวเลข 13 หลักพอดี' });
   }
   if (!cleanFullName) {
-    return res.status(400).json({ success: false, message: 'กรุณาระบุชื่อ-นามสกุลของคุณครู' });
+    return res.status(400).json({ success: false, message: 'กรุณาระบุชื่อ-นามสกุลของคุณครู/บุคลากร' });
   }
 
   // 1. ตรวจสอบว่าโรงเรียนที่มีรหัส SMIS นี้ถูกเพิ่มไว้ในระบบหรือยัง
@@ -1854,69 +1946,121 @@ app.post('/api/auth/register-teacher', async (req, res) => {
     });
   }
 
-  // 2. ตรวจสอบว่า Citizen ID นี้ลงทะเบียนไปแล้วหรือไม่
-  const users = await getStoredUsers();
-  const existingUser = users.find((u: any) => u.username === cleanCitizenId || u.citizenId === cleanCitizenId);
-  if (existingUser) {
-    return res.status(409).json({
+  // 2. ตรวจสอบการเชื่อมต่อฐานข้อมูล MySQL
+  let conn: any = null;
+  try {
+    conn = await getDirectConnection();
+  } catch (connErr: any) {
+    console.error('MySQL connection failed during teacher registration:', connErr);
+    return res.status(503).json({
       success: false,
-      message: 'เลขประจำตัวประชาชนนี้เคยลงทะเบียนไว้แล้ว กรุณาเข้าสู่ระบบด้วยรหัสผ่านของคุณ',
+      message: `ไม่สามารถเชื่อมต่อฐานข้อมูล MySQL ได้: ${connErr.message || 'กรุณาตรวจสอบการตั้งค่าฐานข้อมูล'}`,
+      error: connErr.message,
     });
   }
 
-  // 3. บันทึกคุณครูใหม่ (สถานะ pending รอแอดมินโรงเรียนอนุมัติ)
-  const maxId = users.reduce((max: number, u: any) => Math.max(max, u.id || 0), 0);
-  const newUser = {
-    id: maxId + 1,
-    username: cleanCitizenId,
-    citizenId: cleanCitizenId,
-    fullName: cleanFullName,
-    position: cleanPosition,
-    department: 'ฝ่ายการสอนและวิชาการ',
-    email: email?.trim() || '',
-    phone: phone?.trim() || '',
-    role: 'teacher',
-    schoolId: targetSchool.id,
-    schoolSmis: cleanSmis,
-    password: '1-6',
-    isPasswordChanged: false,
-    status: 'pending', // ต้องรอแอดมินของโรงเรียนอนุมัติ
-    registeredAt: new Date().toISOString(),
-  };
-
   try {
-    const conn = await getDirectConnection();
-    try {
-      const [result]: any = await conn.execute(
-        `INSERT INTO users (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', 0)`,
-        [targetSchool.id, cleanCitizenId, cleanCitizenId, newUser.password, cleanFullName,
-          newUser.email, 'teacher', newUser.department, cleanPosition, newUser.phone]
-      );
-      newUser.id = result.insertId;
-    } finally {
+    // 3. ตรวจสอบในฐานข้อมูล MySQL จริงว่า Citizen ID นี้ลงทะเบียนไปแล้วหรือไม่
+    const [existingDbUsers]: any = await conn.query(
+      'SELECT id, username, citizen_id, full_name FROM `users` WHERE citizen_id = ? OR username = ? LIMIT 1',
+      [cleanCitizenId, cleanCitizenId]
+    );
+
+    if (existingDbUsers && existingDbUsers.length > 0) {
       await conn.end();
+      return res.status(409).json({
+        success: false,
+        message: `เลขประจำตัวประชาชนนี้ (${cleanCitizenId}) เคยลงทะเบียนไว้ในฐานข้อมูล MySQL แล้ว กรุณาเข้าสู่ระบบด้วยรหัสผ่านของคุณ`,
+      });
     }
-  } catch (error) {
-    console.error('Teacher registration failed:', error);
-    return res.status(503).json({ success: false, message: 'ไม่สามารถบันทึกคำขอสมัครลง MySQL ได้ กรุณาติดต่อผู้ดูแลระบบ' });
-  }
 
-  try {
-    users.push(newUser);
-    const dir = path.dirname(USERS_DATA_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), 'utf-8');
-  } catch (e) {
-    console.warn('Could not update local user cache:', e);
-  }
+    // Role และ Department ตามตำแหน่ง (รองรับ ผอ. / รอง ผอ. / ครู)
+    let regRole: 'teacher' | 'director' | 'admin' = 'teacher';
+    let regDept = 'ฝ่ายการสอนและวิชาการ';
 
-  return res.json({
-    success: true,
-    message: `สมัครเข้าใช้งานสำเร็จสำหรับคุณครู "${cleanFullName}" ของโรงเรียน ${targetSchool.name} (สถานะ: รอแอดมินโรงเรียนอนุมัติการใช้งาน)`,
-    user: { id: newUser.id, schoolId: newUser.schoolId, status: newUser.status },
-    school: targetSchool,
-  });
+    const isDirector =
+      (cleanPosition.includes('ผู้อำนวยการ') || cleanPosition === 'ผอ.' || cleanPosition === 'ผอ') &&
+      !cleanPosition.includes('รอง');
+    const isDeputyDirector =
+      cleanPosition.includes('รองผู้อำนวยการ') || cleanPosition === 'รอง ผอ.' || cleanPosition === 'รอง ผอ';
+
+    if (isDirector) {
+      regRole = 'director';
+      regDept = 'ฝ่ายบริหารสถานศึกษา';
+    } else if (isDeputyDirector) {
+      regRole = 'teacher';
+      regDept = 'ฝ่ายบริหารสถานศึกษา';
+    }
+
+    const defaultPass = '1-6';
+    const [insertResult]: any = await conn.execute(
+      `INSERT INTO \`users\` (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', 0)`,
+      [
+        targetSchool.id,
+        cleanCitizenId,
+        cleanCitizenId,
+        defaultPass,
+        cleanFullName,
+        email?.trim() || '',
+        regRole,
+        regDept,
+        cleanPosition,
+        phone?.trim() || '',
+      ]
+    );
+
+    const insertedId = insertResult.insertId;
+    await conn.end();
+
+    const newUser = {
+      id: insertedId,
+      username: cleanCitizenId,
+      citizenId: cleanCitizenId,
+      fullName: cleanFullName,
+      position: cleanPosition,
+      department: regDept,
+      email: email?.trim() || '',
+      phone: phone?.trim() || '',
+      role: regRole,
+      schoolId: targetSchool.id,
+      schoolSmis: cleanSmis,
+      password: defaultPass,
+      isPasswordChanged: false,
+      status: 'pending',
+      registeredAt: new Date().toISOString(),
+    };
+
+    // อัปเดตไฟล์สำรองแคชเพื่อความสอดคล้อง
+    try {
+      const users = await getStoredUsers();
+      users.push(newUser);
+      const dir = path.dirname(USERS_DATA_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(USERS_DATA_FILE, JSON.stringify(users, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Could not update local user cache file:', e);
+    }
+
+    return res.json({
+      success: true,
+      message: `สมัครเข้าใช้งานสำเร็จสำหรับ ${cleanPosition} "${cleanFullName}" ของโรงเรียน ${targetSchool.name} (บันทึกลงฐานข้อมูล MySQL เรียบร้อยแล้ว - สถานะ: รอการอนุมัติการใช้งาน)`,
+      user: { id: newUser.id, schoolId: newUser.schoolId, status: newUser.status },
+      school: targetSchool,
+    });
+  } catch (error: any) {
+    if (conn) {
+      try {
+        await conn.end();
+      } catch (e) {}
+    }
+    console.error('Teacher registration MySQL insert error:', error);
+    return res.status(503).json({
+      success: false,
+      message: `ไม่สามารถบันทึกคำขอสมัครลง MySQL ได้: ${error.message || 'กรุณาติดต่อผู้ดูแลระบบ'}`,
+      error: error.message,
+    });
+  }
 });
 
 // --- UNIFIED LOGIN (Super Admin & School Staff) ---

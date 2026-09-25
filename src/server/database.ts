@@ -705,75 +705,71 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       }
     }
 
-    // 3. Sync Users for this school
-    if (Array.isArray(data.users)) {
-      if (data.users.length === 0) {
-        await conn.query('DELETE FROM users WHERE school_id = ?', [schoolId]);
-      } else {
-        const keptUserIds: number[] = [];
-        for (const u of data.users) {
-          if (!u.username || !u.fullName) continue;
-          const userPass = u.password || u.passwordHash || '123456';
-          if (u.id && u.id > 0) {
-            await conn.query(
-              `INSERT INTO users (id, school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON DUPLICATE KEY UPDATE
-                 username = VALUES(username),
-                 citizen_id = VALUES(citizen_id),
-                 password_hash = VALUES(password_hash),
-                 full_name = VALUES(full_name),
-                 email = VALUES(email),
-                 role = VALUES(role),
-                 department = VALUES(department),
-                 position = VALUES(position),
-                 phone = VALUES(phone),
-                 is_active = VALUES(is_active),
-                 status = VALUES(status),
-                 is_password_changed = VALUES(is_password_changed)`,
-              [
-                u.id,
-                schoolId,
-                u.username,
-                u.citizenId || '',
-                userPass,
-                u.fullName,
-                u.email || '',
-                u.role || 'teacher',
-                u.department || '',
-                u.position || '',
-                u.phone || '',
-                u.isActive !== false ? 1 : 0,
-                u.status || 'approved',
-                u.isPasswordChanged ? 1 : 0
-              ]
-            );
-            keptUserIds.push(u.id);
-          } else {
-            const [ur]: any = await conn.query(
-              `INSERT INTO users (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                schoolId,
-                u.username,
-                u.citizenId || '',
-                userPass,
-                u.fullName,
-                u.email || '',
-                u.role || 'teacher',
-                u.department || '',
-                u.position || '',
-                u.phone || '',
-                u.isActive !== false ? 1 : 0,
-                u.status || 'approved',
-                u.isPasswordChanged ? 1 : 0
-              ]
-            );
-            if (ur.insertId) keptUserIds.push(ur.insertId);
-          }
-        }
-        if (keptUserIds.length > 0) {
-          await conn.query(`DELETE FROM users WHERE school_id = ? AND id NOT IN (${keptUserIds.join(',')})`, [schoolId]);
+    // 3. Sync Users for this school (Safely upsert users, NEVER delete to prevent losing registered teachers)
+    if (Array.isArray(data.users) && data.users.length > 0) {
+      for (const u of data.users) {
+        if (!u.username || !u.fullName) continue;
+        const userPass = u.password || u.passwordHash || '123456';
+        if (u.id && u.id > 0) {
+          await conn.query(
+            `INSERT INTO users (id, school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               username = VALUES(username),
+               citizen_id = VALUES(citizen_id),
+               password_hash = VALUES(password_hash),
+               full_name = VALUES(full_name),
+               email = VALUES(email),
+               role = VALUES(role),
+               department = VALUES(department),
+               position = VALUES(position),
+               phone = VALUES(phone),
+               is_active = VALUES(is_active),
+               status = VALUES(status),
+               is_password_changed = VALUES(is_password_changed)`,
+            [
+              u.id,
+              schoolId,
+              u.username,
+              u.citizenId || '',
+              userPass,
+              u.fullName,
+              u.email || '',
+              u.role || 'teacher',
+              u.department || '',
+              u.position || '',
+              u.phone || '',
+              u.isActive !== false ? 1 : 0,
+              u.status || 'approved',
+              u.isPasswordChanged ? 1 : 0
+            ]
+          );
+        } else {
+          await conn.query(
+            `INSERT INTO users (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               full_name = VALUES(full_name),
+               email = VALUES(email),
+               phone = VALUES(phone),
+               role = VALUES(role),
+               position = VALUES(position)`,
+            [
+              schoolId,
+              u.username,
+              u.citizenId || '',
+              userPass,
+              u.fullName,
+              u.email || '',
+              u.role || 'teacher',
+              u.department || '',
+              u.position || '',
+              u.phone || '',
+              u.isActive !== false ? 1 : 0,
+              u.status || 'approved',
+              u.isPasswordChanged ? 1 : 0
+            ]
+          );
         }
       }
     }
