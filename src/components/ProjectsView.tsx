@@ -1,3 +1,5 @@
+import { ProjectWorkflow } from './ProjectWorkflow';
+import { canAccessProject } from '../utils/projectAccess';
 import React, { useState, useEffect } from 'react';
 import { Project, User, BudgetAllocation, FiscalYear, School } from '../types';
 import {
@@ -229,6 +231,9 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
 
     if (editingProject) {
       // Update
+      if (editingProject.approvedBy && (formData.department !== editingProject.department || Number(formData.allocatedBudget) !== editingProject.allocatedBudget)) {
+        alert('โครงการอนุมัติแล้วไม่สามารถเปลี่ยนกลุ่มงานหรือวงเงินในแบบเสนอ'); return;
+      }
       const updated = projects.map((p) => {
         if (p.id === editingProject.id) {
           const alloc = Number(formData.allocatedBudget) || 0;
@@ -240,6 +245,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
             proposerName: cleanResponsiblePerson,
             allocatedBudget: alloc,
             remainingBudget: Math.max(0, alloc - p.spentBudget),
+            isBudgetCutConfirmed: p.approvedBy ? p.isBudgetCutConfirmed : (alloc === p.allocatedBudget && formData.department === p.department ? p.isBudgetCutConfirmed : false),
           };
         }
         return p;
@@ -252,16 +258,18 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
       const newProj: Project = {
         ...(formData as Project),
         id: newId,
-        schoolId: 1,
+        schoolId: activeFiscalYear.schoolId,
         fiscalYearId: activeFiscalYear.id,
         responsiblePerson: cleanResponsiblePerson,
+        responsibleId: cleanResponsiblePerson.trim() === currentUser.fullName.trim() ? currentUser.id : undefined,
         proposerCitizenId: cleanCitizenId,
         proposerName: cleanResponsiblePerson,
         allocatedBudget: alloc,
         spentBudget: 0,
         remainingBudget: alloc,
         status: formData.status || 'not_started',
-        approvalStatus: currentUser.role === 'admin' || currentUser.role === 'director' ? 'approved' : 'pending',
+        approvalStatus: 'pending',
+        isBudgetCutConfirmed: false,
       };
       onUpdateProjects([...projects, newProj]);
     }
@@ -358,12 +366,14 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
   // Confirm Approval (with budget confirmation/adjustment)
   const handleConfirmApproval = () => {
     if (!approvingProject) return;
-    const finalBudget = Number(approvingBudget) || approvingProject.allocatedBudget;
+    if (!approvingProject.isBudgetCutConfirmed) { alert('กรุณาตัดแผนงบประมาณของกลุ่มงานก่อนอนุมัติโครงการ'); return; }
+    const finalBudget = approvingProject.allocatedBudget;
 
     const updated = projects.map((p) => {
       if (p.id === approvingProject.id) {
         return {
           ...p,
+          approvalStatus: 'approved' as const,
           approvedBy: currentUser.fullName,
           approvedDate: new Date().toISOString().split('T')[0],
           status: p.status === 'not_started' ? ('in_progress' as const) : p.status,
@@ -412,14 +422,14 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
         <div>
           <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <FolderGit2 className="h-6 w-6 text-blue-700" />
-            <span>ระบบบริหารโครงการตามแผนปฏิบัติการ (Project Management)</span>
+            <span>โครงการเสนอและอนุมัติ</span>
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            จัดการแบบเสนอโครงการ พิจารณาอนุมัติ ปรับเปลี่ยนงบประมาณ บันทึกค่าใช้จ่าย และปิดโครงการเมื่อเสร็จสิ้น
+            ติดตามโครงการที่เสนอ รอตัดแผน รออนุมัติ และโครงการที่ดำเนินงานได้แล้ว
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {onNavigateToAiWriter && (
             <button
               id="btn-nav-ai-writer-shortcut"
@@ -443,6 +453,14 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
             <span>เพิ่มโครงการใหม่</span>
           </button>
         </div>
+      </div>
+
+      <ProjectWorkflow active={3} />
+
+      <div className="no-print grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4"><div className="text-xs font-semibold text-amber-900">รอตัดแผน</div><div className="mt-1 text-2xl font-bold text-amber-950">{projects.filter(p => !p.approvedBy && !p.isBudgetCutConfirmed).length} <span className="text-xs font-medium">โครงการ</span></div></div>
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4"><div className="text-xs font-semibold text-blue-900">ตัดแผนแล้ว รออนุมัติ</div><div className="mt-1 text-2xl font-bold text-blue-950">{projects.filter(p => !p.approvedBy && p.isBudgetCutConfirmed).length} <span className="text-xs font-medium">โครงการ</span></div></div>
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><div className="text-xs font-semibold text-emerald-900">อนุมัติแล้ว</div><div className="mt-1 text-2xl font-bold text-emerald-950">{approvedCount} <span className="text-xs font-medium">โครงการ</span></div></div>
       </div>
 
       {/* SUB-TABS NAVIGATION BAR */}
@@ -575,7 +593,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
                 รายการแบบเสนอโครงการที่รอการพิจารณาอนุมัติ
               </div>
               <p className="text-xs text-amber-800">
-                เจ้าหน้าที่แผนงบประมาณและผู้อำนวยการสามารถปรับเปลี่ยนวงเงินงบประมาณที่เสนอขอ และกดอนุมัติโครงการเพื่อนำเข้าสู่แผนปฏิบัติการ
+                โครงการต้องผ่านการตัดแผนงบประมาณให้อยู่ในกรอบของฝ่ายงานก่อน ผู้อำนวยการจึงอนุมัติได้
               </p>
             </div>
           </div>
@@ -661,7 +679,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
       {/* Projects Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden no-print">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs sm:text-sm">
+          <table className="w-full min-w-[900px] text-left text-xs sm:text-sm">
             <thead>
               <tr className="bg-slate-100 border-b border-slate-200 text-slate-700 font-semibold">
                 <th className="py-3 px-3 w-24">รหัส</th>
@@ -699,7 +717,10 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
                       </td>
 
                       <td className="py-3 px-3 font-medium text-slate-900 align-top">
-                        <div className="font-semibold text-slate-900">{p.projectName}</div>
+                        {p.approvedBy && canAccessProject(p, currentUser) ?
+                          <button type="button" onClick={() => onOpenExpensesForProject(p)} className="text-left font-semibold text-blue-800 hover:underline">{p.projectName}</button> :
+                          <div className="font-semibold text-slate-900">{p.projectName}</div>}
+                        {p.approvedBy && canAccessProject(p, currentUser) && <button type="button" onClick={() => onOpenExpensesForProject(p)} className="mt-1 block rounded-lg bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800 hover:bg-blue-100">บันทึกค่าใช้จ่ายและรายงานโครงการ</button>}
                         <div className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">{p.objectives}</div>
                         {p.budgetAdjustedBy && (
                           <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded inline-block mt-1 font-mono">
@@ -807,6 +828,8 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
                             </span>
                             <span className="text-[10px] text-slate-500 mt-0.5">{p.approvedDate}</span>
                           </div>
+                        ) : !p.isBudgetCutConfirmed ? (
+                          <span className="text-[11px] text-amber-700 font-medium">รอตัดแผนงบประมาณ</span>
                         ) : canManageBudget ? (
                           <button
                             id={`btn-approve-project-${p.id}`}
@@ -1165,16 +1188,9 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
                 <label className="block text-xs font-bold text-slate-800 mb-1">
                   วงเงินงบประมาณที่อนุมัติให้ใช้ (บาท)
                 </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="500"
-                  value={approvingBudget}
-                  onChange={(e) => setApprovingBudget(Number(e.target.value) || 0)}
-                  className="w-full rounded-lg border border-slate-300 p-2.5 text-base font-bold font-mono text-blue-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                />
+                <div className="text-base font-bold text-blue-900">{approvingProject.allocatedBudget.toLocaleString()} บาท</div>
                 <span className="text-[11px] text-slate-500 mt-1 block">
-                  งบที่เสนอขอเบื้องต้น: {approvingProject.allocatedBudget.toLocaleString()} บาท (สามารถปรับยอดก่อนอนุมัติได้)
+                  ยอดที่ผ่านการตัดแผนของกลุ่มงาน
                 </span>
               </div>
 

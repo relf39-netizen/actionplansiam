@@ -31,10 +31,6 @@ import {
   LogOut,
   ChevronRight,
   Sparkles,
-  X,
-  Layers,
-  Wallet,
-  PieChart,
 } from 'lucide-react';
 import { School, DatabaseConfig, DatabaseStatus, User } from '../types';
 
@@ -51,20 +47,14 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   onLogout,
   currentUser,
 }) => {
-  const [activeTab, setActiveTab] = useState<'schools' | 'superadmin_account' | 'database'>('schools');
+  const [activeTab, setActiveTab] = useState<'schools' | 'teachers' | 'superadmin_account' | 'database'>('schools');
   const [schools, setSchools] = useState<School[]>([]);
   const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [usersError, setUsersError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-
-  // Modals for Teacher Approval & School Funding Groups
-  const [teacherModalSchool, setTeacherModalSchool] = useState<School | null>(null);
-  const [fundingModalSchool, setFundingModalSchool] = useState<School | null>(null);
-  const [schoolFundingData, setSchoolFundingData] = useState<{
-    loading: boolean;
-    allocations: any[];
-    totalBudget: number;
-  } | null>(null);
+  const [teacherSchoolFilter, setTeacherSchoolFilter] = useState<string>('all');
+  const [teacherStatusFilter, setTeacherStatusFilter] = useState<'all' | 'pending' | 'approved'>('all');
 
   // Super Admin account & password change state
   const [saUsername, setSaUsername] = useState('peyarm');
@@ -76,7 +66,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [saError, setSaError] = useState<string | null>(null);
   const [saSuccess, setSaSuccess] = useState<string | null>(null);
   const [saLoading, setSaLoading] = useState(false);
-  const [saSource, setSaSource] = useState<'mysql' | 'local_file' | 'unknown'>('mysql');
+  const [saSource, setSaSource] = useState<'mysql' | 'local_file'>('mysql');
 
   // DB Config & Status state
   const [dbConfig, setDbConfig] = useState<DatabaseConfig>({
@@ -111,10 +101,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [isSubmittingSchool, setIsSubmittingSchool] = useState(false);
 
-  // Global fetch error banner and manual refresh feedback
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [refreshSuccessMessage, setRefreshSuccessMessage] = useState<string | null>(null);
-
   // Fetch initial schools, users, sa account & db status
   const fetchSchools = async () => {
     try {
@@ -122,47 +108,40 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       const data = await parseSafeJson(res, 'ไม่สามารถดึงข้อมูลโรงเรียนได้');
       if (res.ok && data.success && Array.isArray(data.schools)) {
         setSchools(data.schools);
-      } else if (!res.ok || data.success === false) {
-        setFetchError(data.message || 'ไม่สามารถดึงข้อมูลโรงเรียนจากฐานข้อมูล MySQL ได้');
       }
-    } catch (e: any) {
+    } catch (e) {
       console.error('Error fetching schools:', e);
-      setFetchError(e.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลโรงเรียน');
     }
   };
 
   const fetchUsers = async () => {
     try {
       const res = await fetch('/api/super-admin/users');
-      const data = await parseSafeJson(res, 'ไม่สามารถเชื่อมต่อเพื่อดึงรายชื่อผู้ใช้ได้');
+      const data = await parseSafeJson(res);
       if (res.ok && data.success && Array.isArray(data.users)) {
         setAllUsers(data.users);
-      } else if (!res.ok || data.success === false) {
-        setFetchError(data.message || 'ไม่สามารถดึงรายชื่อคุณครู/บุคลากรจาก MySQL ได้');
+        setUsersError(null);
+      } else {
+        setUsersError(data.message || 'ไม่สามารถดึงรายชื่อคุณครูจาก MySQL ได้');
       }
-    } catch (e: any) {
+    } catch (e) {
       console.error('Error fetching users for super admin:', e);
-      setFetchError(e.message || 'เกิดข้อผิดพลาดในการดึงรายชื่อผู้ใช้งาน');
+      setUsersError('ไม่สามารถติดต่อเซิร์ฟเวอร์เพื่อดึงรายชื่อคุณครูได้');
     }
   };
 
   const fetchSuperAdminAccount = async () => {
     try {
       const res = await fetch('/api/super-admin/account');
-      const data = await parseSafeJson(res, 'ไม่สามารถเชื่อมต่อ API บัญชี Super Admin ได้');
-      if (res.ok && data.success && data.account) {
+      const data = await parseSafeJson(res);
+      if (data.success && data.account) {
         setSaUsername(data.account.username || 'peyarm');
         setSaFullName(data.account.fullName || 'ผู้ดูแลระบบส่วนกลาง (Super Admin)');
         setSaEmail(data.account.email || 'peyarm@obec.mail.go.th');
         setSaSource(data.account.source || 'mysql');
-        setSaError(null);
-      } else {
-        setSaError(data.message || 'ไม่สามารถดึงข้อมูลบัญชี Super Admin จาก MySQL ได้');
-        setSaSource('unknown');
       }
-    } catch (e: any) {
+    } catch (e) {
       console.error('Error fetching super admin account:', e);
-      setSaError(e.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลบัญชี Super Admin');
     }
   };
 
@@ -185,75 +164,15 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     }
   };
 
-  const refreshAllData = async (manualClick = false) => {
-    setLoading(true);
-    if (manualClick) {
-      setFetchError(null);
-      setRefreshSuccessMessage(null);
-    }
-    try {
-      await Promise.all([
-        fetchSchools(),
-        fetchUsers(),
-        fetchSuperAdminAccount(),
-        fetchDbStatus(),
-      ]);
-      if (manualClick) {
-        setRefreshSuccessMessage('ดึงข้อมูลล่าสุดจากฐานข้อมูล MySQL เรียบร้อยแล้ว');
-        setTimeout(() => setRefreshSuccessMessage(null), 4000);
-      }
-    } catch (e: any) {
-      setFetchError(e.message || 'เกิดข้อผิดพลาดในการโหลดข้อมูลจาก MySQL');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleOpenFundingModal = async (s: School) => {
-    setFundingModalSchool(s);
-    setSchoolFundingData({
-      loading: true,
-      allocations: [],
-      totalBudget: s.totalBudget || 0,
-    });
-    try {
-      const res = await fetch(`/api/app-data?school_id=${s.id}`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
-          const allocs = Array.isArray(json.data.allocations) && json.data.allocations.length > 0
-            ? json.data.allocations
-            : [
-                { id: 1, departmentName: 'ฝ่ายบริหารงานวิชาการ', percentage: 40, allocatedAmount: (s.totalBudget || 0) * 0.4, description: 'งานจัดการเรียนการสอน พัฒนาหลักสูตร สื่อการสอน นวัตกรรม และวิจัยในชั้นเรียน' },
-                { id: 2, departmentName: 'ฝ่ายบริหารงานงบประมาณ', percentage: 25, allocatedAmount: (s.totalBudget || 0) * 0.25, description: 'งานการเงิน บัญชี พัสดุ และแผนปฏิบัติการประจำปี' },
-                { id: 3, departmentName: 'ฝ่ายบริหารงานบุคคล', percentage: 15, allocatedAmount: (s.totalBudget || 0) * 0.15, description: 'งานพัฒนาบุคลากร อัตรากำลัง วินัย และสวัสดิการครู' },
-                { id: 4, departmentName: 'ฝ่ายบริหารงานทั่วไป', percentage: 20, allocatedAmount: (s.totalBudget || 0) * 0.20, description: 'งานอาคารสถานที่ สภาพแวดล้อม ยานพาหนะ และชุมชนสัมพันธ์' },
-              ];
-          setSchoolFundingData({
-            loading: false,
-            allocations: allocs,
-            totalBudget: json.data.school?.totalBudget || s.totalBudget || 0,
-          });
-          return;
-        }
-      }
-    } catch (e) {}
-
-    setSchoolFundingData({
-      loading: false,
-      allocations: [
-        { id: 1, departmentName: 'ฝ่ายบริหารงานวิชาการ', percentage: 40, allocatedAmount: (s.totalBudget || 0) * 0.4, description: 'งานจัดการเรียนการสอน พัฒนาหลักสูตร สื่อการสอน นวัตกรรม และวิจัยในชั้นเรียน' },
-        { id: 2, departmentName: 'ฝ่ายบริหารงานงบประมาณ', percentage: 25, allocatedAmount: (s.totalBudget || 0) * 0.25, description: 'งานการเงิน บัญชี พัสดุ และแผนปฏิบัติการประจำปี' },
-        { id: 3, departmentName: 'ฝ่ายบริหารงานบุคคล', percentage: 15, allocatedAmount: (s.totalBudget || 0) * 0.15, description: 'งานพัฒนาบุคลากร อัตรากำลัง วินัย และสวัสดิการครู' },
-        { id: 4, departmentName: 'ฝ่ายบริหารงานทั่วไป', percentage: 20, allocatedAmount: (s.totalBudget || 0) * 0.20, description: 'งานอาคารสถานที่ สภาพแวดล้อม ยานพาหนะ และชุมชนสัมพันธ์' },
-      ],
-      totalBudget: s.totalBudget || 0,
-    });
-  };
-
-  // Re-fetch data whenever tab is opened/switched
   useEffect(() => {
-    refreshAllData(false);
+    setLoading(true);
+    Promise.all([fetchSchools(), fetchUsers(), fetchSuperAdminAccount(), fetchDbStatus()]).finally(() =>
+      setLoading(false)
+    );
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'teachers') void fetchUsers();
   }, [activeTab]);
 
   const handleSmisInput = (val: string) => {
@@ -530,6 +449,24 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     );
   });
 
+  const filteredTeachers = allUsers.filter((u) => {
+    if (u.role === 'superadmin') return false;
+    if (teacherSchoolFilter !== 'all' && String(u.schoolId) !== teacherSchoolFilter && u.schoolSmis !== teacherSchoolFilter) {
+      return false;
+    }
+    if (teacherStatusFilter === 'pending' && u.status !== 'pending') return false;
+    if (teacherStatusFilter === 'approved' && u.status === 'pending') return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const matchName = u.fullName?.toLowerCase().includes(q);
+      const matchUser = u.username?.toLowerCase().includes(q);
+      const matchSchool = u.schoolName?.toLowerCase().includes(q);
+      const matchSmis = u.schoolSmis?.toLowerCase().includes(q);
+      if (!matchName && !matchUser && !matchSchool && !matchSmis) return false;
+    }
+    return true;
+  });
+
   const pendingTeachersCount = allUsers.filter((u) => u.role !== 'superadmin' && u.status === 'pending').length;
   const activeCount = schools.filter((s) => s.isActive !== false).length;
   const inactiveCount = schools.filter((s) => s.isActive === false).length;
@@ -571,19 +508,8 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             </div>
           </div>
 
-          {/* Quick profile info, Refresh & Logout */}
-          <div className="flex items-center gap-2 self-start md:self-auto bg-slate-800/80 p-2 rounded-2xl border border-slate-700">
-            <button
-              type="button"
-              onClick={() => refreshAllData(true)}
-              disabled={loading}
-              className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer border border-blue-500 disabled:opacity-50"
-              title="ดึงข้อมูลล่าสุดจาก MySQL ทันที"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">รีเฟรชข้อมูล</span>
-            </button>
-
+          {/* Quick profile info & Logout */}
+          <div className="flex items-center gap-3 self-start md:self-auto bg-slate-800/80 p-2 rounded-2xl border border-slate-700">
             <div className="text-right px-2">
               <div className="text-xs font-bold text-white flex items-center gap-1.5 justify-end">
                 <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
@@ -599,7 +525,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 title="ออกจากระบบ Super Admin"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">ออกจากระบบ</span>
+                <span>ออกจากระบบ</span>
               </button>
             )}
           </div>
@@ -620,7 +546,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
           </div>
 
           <div
-            onClick={() => setActiveTab('schools')}
+            onClick={() => setActiveTab('teachers')}
             className="bg-slate-800/60 hover:bg-slate-800/90 border border-slate-700/70 rounded-2xl p-4 transition-all cursor-pointer group"
           >
             <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
@@ -634,7 +560,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
           </div>
 
           <div
-            onClick={() => setActiveTab('schools')}
+            onClick={() => setActiveTab('teachers')}
             className="bg-slate-800/60 hover:bg-slate-800/90 border border-slate-700/70 rounded-2xl p-4 transition-all cursor-pointer group"
           >
             <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
@@ -675,13 +601,26 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
           }`}
         >
           <Building2 className="w-4 h-4 text-blue-800" />
-          <span>1. จัดการโรงเรียน & อนุมัติคุณครู (SMIS 8 หลัก)</span>
+          <span>1. เพิ่มและจัดการโรงเรียน (SMIS 8 หลัก)</span>
           <span className="ml-1 px-2 py-0.5 text-xs bg-slate-100 rounded-full font-mono font-bold text-slate-700">
             {schools.length}
           </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('teachers')}
+          className={`px-4 py-3 text-xs sm:text-sm font-bold flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'teachers'
+              ? 'border-blue-900 text-blue-950 bg-blue-50/50 rounded-t-xl'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <UserCheck className="w-4 h-4 text-amber-600" />
+          <span>2. อนุมัติคุณครู & แต่งตั้ง Admin โรงเรียน</span>
           {pendingTeachersCount > 0 && (
-            <span className="ml-1.5 px-2 py-0.5 text-[11px] bg-amber-500 text-slate-950 rounded-full font-black animate-pulse shadow-xs">
-              🔔 มีครูสมัครใหม่ {pendingTeachersCount} คน
+            <span className="ml-1 px-2 py-0.5 text-xs bg-amber-500 text-slate-950 rounded-full font-bold">
+              {pendingTeachersCount} รออนุมัติ
             </span>
           )}
         </button>
@@ -696,7 +635,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
           }`}
         >
           <Key className="w-4 h-4 text-purple-700" />
-          <span>2. บัญชี Super Admin (Username & Password ใน MySQL)</span>
+          <span>3. บัญชี Super Admin (Username & Password ใน MySQL)</span>
         </button>
 
         <button
@@ -709,60 +648,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
           }`}
         >
           <Database className="w-4 h-4 text-emerald-700" />
-          <span>3. จัดการฐานข้อมูล MySQL & โครงสร้างระบบ</span>
+          <span>4. จัดการฐานข้อมูล MySQL & โครงสร้างระบบ</span>
         </button>
       </div>
-
-      {/* Global Fetch Error Notification */}
-      {fetchError && (
-        <div className="p-4 rounded-2xl border border-red-300 bg-red-50 text-red-950 shadow-sm flex items-start justify-between gap-3 animate-fade-in">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-            <div>
-              <div className="font-bold text-sm text-red-950">ข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล MySQL</div>
-              <p className="text-xs text-red-800 mt-0.5 font-medium">{fetchError}</p>
-              <p className="text-[11px] text-red-700 mt-1">
-                กรุณาตรวจสอบการตั้งค่าฐานข้อมูลในแท็บ "3. จัดการฐานข้อมูล MySQL & โครงสร้างระบบ" หรือกดปุ่มรีเฟรชข้อมูลอีกครั้ง
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => refreshAllData(true)}
-              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              <span>ลองใหม่อีกครั้ง</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setFetchError(null)}
-              className="text-red-500 hover:text-red-800 p-1 rounded-lg transition-colors cursor-pointer"
-              title="ปิดการแจ้งเตือน"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Manual Refresh Feedback */}
-      {refreshSuccessMessage && (
-        <div className="p-3.5 rounded-2xl border border-emerald-300 bg-emerald-50 text-emerald-950 shadow-sm flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 text-xs font-bold text-emerald-900">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>{refreshSuccessMessage}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setRefreshSuccessMessage(null)}
-            className="text-emerald-600 hover:text-emerald-900 p-1"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
 
       {/* TAB 1: SCHOOLS MANAGEMENT (FORM ONLY HAS SMIS 8 DIGITS & SCHOOL NAME) */}
       {activeTab === 'schools' && (
@@ -892,8 +780,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold">
                     <th className="py-3 px-3 w-12 text-center">ที่</th>
                     <th className="py-3 px-3 w-28">รหัส SMIS</th>
-                    <th className="py-3 px-4 min-w-[200px]">ชื่อโรงเรียน (คลิกดูกลุ่มทุน)</th>
-                    <th className="py-3 px-3 min-w-[170px] text-center">คุณครู & อนุมัติใช้งาน</th>
+                    <th className="py-3 px-4 min-w-[200px]">ชื่อโรงเรียน</th>
                     <th className="py-3 px-3 min-w-[150px]">แอดมินโรงเรียน</th>
                     <th className="py-3 px-3 text-center w-24">สถานะ</th>
                     <th className="py-3 px-3 text-center w-24">จัดการ</th>
@@ -904,7 +791,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                     const teachersInSchool = allUsers.filter(
                       (u) => u.schoolId === s.id || u.schoolSmis === s.smisCode
                     );
-                    const pendingInSchool = teachersInSchool.filter((u) => u.status === 'pending');
                     const adminUser = teachersInSchool.find((u) => u.role === 'admin');
 
                     return (
@@ -914,52 +800,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                           {s.smisCode || s.schoolCode?.slice(0, 8) || '-'}
                         </td>
                         <td className="py-3 px-4">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenFundingModal(s)}
-                            className="text-left font-bold text-blue-950 hover:text-blue-700 hover:underline flex items-center gap-1.5 group cursor-pointer"
-                            title="คลิกที่นี่เพื่อดูรายชื่อกลุ่มทุนและฝ่ายงานงบประมาณของโรงเรียนนี้"
-                          >
-                            <Building2 className="w-4 h-4 text-blue-700 shrink-0 group-hover:scale-110 transition-transform" />
-                            <span>{s.name}</span>
-                          </button>
-                          <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-2">
-                            <span className="font-mono text-amber-700 font-semibold">SMIS: {s.smisCode || s.schoolCode}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenFundingModal(s)}
-                              className="text-blue-600 hover:text-blue-800 text-[11px] font-bold cursor-pointer inline-flex items-center gap-1 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200 hover:bg-blue-100 transition-colors"
-                            >
-                              <Layers className="w-3 h-3 text-blue-600" />
-                              <span>ดูกลุ่มทุนทางโรงเรียน</span>
-                            </button>
+                          <div className="font-bold text-slate-900">{s.name}</div>
+                          <div className="text-[11px] text-slate-500">
+                            คุณครูที่ลงทะเบียน: {teachersInSchool.length} คน
                           </div>
-                        </td>
-                        <td className="py-3 px-3 text-center">
-                          {pendingInSchool.length > 0 ? (
-                            <button
-                              type="button"
-                              onClick={() => setTeacherModalSchool(s)}
-                              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs inline-flex items-center gap-1.5 animate-pulse shadow-md transition-all cursor-pointer ring-2 ring-amber-300"
-                              title="มีคุณครูสมัครเข้ามาใหม่ คลิกเพื่อดูรายชื่อและอนุมัติการใช้งานทันที"
-                            >
-                              <span className="relative flex h-2 w-2">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-600 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-700"></span>
-                              </span>
-                              <span>🔔 มีครูสมัครใหม่ ({pendingInSchool.length} คน)</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setTeacherModalSchool(s)}
-                              className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-blue-50 hover:text-blue-900 text-slate-700 font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer transition-colors border border-slate-200"
-                              title="คลิกเพื่อดูรายชื่อคุณครูทั้งหมดของโรงเรียนนี้"
-                            >
-                              <Users2 className="w-3.5 h-3.5 text-slate-500" />
-                              <span>คุณครู ({teachersInSchool.length} คน)</span>
-                            </button>
-                          )}
                         </td>
                         <td className="py-3 px-3">
                           {adminUser || s.adminTeacherName ? (
@@ -968,14 +812,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                               <span>{adminUser?.fullName || s.adminTeacherName}</span>
                             </div>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => setTeacherModalSchool(s)}
-                              className="text-[11px] text-amber-800 bg-amber-50 hover:bg-amber-100 px-2 py-0.5 rounded-md border border-amber-300 font-bold cursor-pointer transition-colors"
-                              title="คลิกเพื่อแต่งตั้งคุณครูเป็น Admin โรงเรียน"
-                            >
-                              + แต่งตั้ง Admin โรงเรียน
-                            </button>
+                            <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                              ยังไม่ได้แต่งตั้ง Admin
+                            </span>
                           )}
                         </td>
                         <td className="py-3 px-3 text-center">
@@ -1006,7 +845,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   })}
                   {filteredSchools.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-500 text-xs">
+                      <td colSpan={6} className="py-8 text-center text-slate-500 text-xs">
                         ไม่พบข้อมูลโรงเรียนตามที่ค้นหา
                       </td>
                     </tr>
@@ -1018,7 +857,197 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
         </div>
       )}
 
-      {/* TAB 2: SUPER ADMIN ACCOUNT & CREDENTIALS IN MYSQL */}
+      {/* TAB 2: TEACHER APPROVALS & DESIGNATING SCHOOL ADMIN */}
+      {activeTab === 'teachers' && (
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
+          {usersError && <div role="alert" className="rounded-xl bg-red-50 border border-red-200 p-3 text-sm text-red-800">{usersError}</div>}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <UserCheck className="w-5 h-5 text-amber-600" />
+                <span>การอนุมัติคุณครู & แต่งตั้ง Admin ของโรงเรียน</span>
+                {pendingTeachersCount > 0 && (
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500 text-slate-950">
+                    {pendingTeachersCount} รอการอนุมัติ
+                  </span>
+                )}
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                เมื่อคุณครูสมัครเข้าใช้งานด้วยรหัส SMIS 8 หลักแล้ว Super Admin มีหน้าที่อนุมัติการใช้งานและแต่งตั้งเป็น Admin ของโรงเรียน เพื่อให้ Admin ของโรงเรียนไปอนุมัติครูคนอื่นๆ ต่อไป
+              </p>
+            </div>
+
+            {/* Filter controls */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => void fetchUsers()} className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50">
+                รีเฟรชรายชื่อ
+              </button>
+              <select
+                value={teacherSchoolFilter}
+                onChange={(e) => setTeacherSchoolFilter(e.target.value)}
+                className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-medium text-slate-800 focus:outline-none"
+              >
+                <option value="all">ทุกโรงเรียน ({schools.length} แห่ง)</option>
+                {schools.map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.name} ({s.smisCode})
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={teacherStatusFilter}
+                onChange={(e) => setTeacherStatusFilter(e.target.value as any)}
+                className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-medium text-slate-800 focus:outline-none"
+              >
+                <option value="all">ทุกสถานะ</option>
+                <option value="pending">รออนุมัติเท่านั้น ({pendingTeachersCount})</option>
+                <option value="approved">อนุมัติแล้ว</option>
+              </select>
+
+              <div className="relative">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="ค้นหาชื่อ, เลขบัตรประชาชน..."
+                  className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-1.5 pl-8 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none w-48"
+                />
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs sm:text-sm">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold">
+                  <th className="py-3 px-3 w-12 text-center">ที่</th>
+                  <th className="py-3 px-3 min-w-[140px]">เลขบัตร ปชช. (Username)</th>
+                  <th className="py-3 px-4 min-w-[180px]">ชื่อ - สกุลคุณครู</th>
+                  <th className="py-3 px-4 min-w-[180px]">โรงเรียน (SMIS 8 หลัก)</th>
+                  <th className="py-3 px-3 min-w-[140px]">ตำแหน่ง</th>
+                  <th className="py-3 px-3 w-32 text-center">สถานะ</th>
+                  <th className="py-3 px-3 w-36 text-center">บทบาท (Role)</th>
+                  <th className="py-3 px-3 min-w-[220px] text-center">การดำเนินการของ Super Admin</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredTeachers.map((u, idx) => (
+                  <tr key={u.id} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="py-3 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
+                    <td className="py-3 px-3 font-mono font-bold text-slate-900">
+                      {u.username || u.citizenId}
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="font-bold text-blue-950">{u.fullName}</div>
+                      <div className="text-[11px] text-slate-500">
+                        {u.phone && <span>โทร: {u.phone} </span>}
+                        {u.email && <span>• {u.email}</span>}
+                      </div>
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="font-semibold text-slate-800">{u.schoolName}</div>
+                      <div className="text-[11px] font-mono text-amber-700">SMIS: {u.schoolSmis}</div>
+                    </td>
+                    <td className="py-3 px-3 text-slate-600">{u.position || 'ครู'}</td>
+                    <td className="py-3 px-3 text-center">
+                      {u.status === 'pending' ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-900 border border-amber-300">
+                          <Clock className="w-3 h-3" />
+                          <span>รออนุมัติ</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-900 border border-emerald-300">
+                          <CheckCircle2 className="w-3 h-3" />
+                          <span>อนุมัติแล้ว</span>
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-center">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ${
+                          u.role === 'admin'
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : u.role === 'director'
+                            ? 'bg-amber-100 text-amber-900'
+                            : 'bg-slate-100 text-slate-700'
+                        }`}
+                      >
+                        {u.role === 'admin' ? (
+                          <>
+                            <ShieldCheck className="w-3 h-3" />
+                            <span>Admin โรงเรียน</span>
+                          </>
+                        ) : u.role === 'director' ? (
+                          'ผู้อำนวยการ'
+                        ) : (
+                          'คุณครู'
+                        )}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 text-center">
+                      <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                        {u.status === 'pending' && (
+                          <button
+                            type="button"
+                            onClick={() => handleApproveTeacher(u.id, 'teacher')}
+                            className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer shadow-xs"
+                            title="อนุมัติการใช้งานเป็นคุณครู"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>อนุมัติ</span>
+                          </button>
+                        )}
+
+                        {u.role !== 'admin' ? (
+                          <button
+                            type="button"
+                            onClick={() => handleSetSchoolAdmin(u)}
+                            className="px-2.5 py-1.5 rounded-lg bg-blue-900 hover:bg-blue-800 text-amber-300 font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer shadow-xs"
+                            title="ตั้งค่าคุณครูท่านนี้เป็นแอดมินของโรงเรียน"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                            <span>ตั้งเป็น Admin โรงเรียน</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleApproveTeacher(u.id, 'teacher')}
+                            className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-[11px] transition-colors cursor-pointer"
+                            title="สลับเป็นคุณครูปกติ"
+                          >
+                            <span>เป็นครูปกติ</span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => handleRejectUser(u.id, u.fullName)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="ปฏิเสธ / ลบคำขอ"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {filteredTeachers.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="py-12 text-center text-slate-500 text-sm">
+                      <UserCheck className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                      <div>ไม่พบรายการคุณครูตามเงื่อนไขที่เลือก</div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: SUPER ADMIN ACCOUNT & CREDENTIALS IN MYSQL */}
       {activeTab === 'superadmin_account' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Card: Current Credentials & Status */}
@@ -1346,337 +1375,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 <div className="p-1.5 bg-slate-50 rounded-lg">● strategies & goals (ยุทธศาสตร์)</div>
                 <div className="p-1.5 bg-slate-50 rounded-lg">● project_expense_items (ค่าใช้จ่าย)</div>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 1: TEACHER APPROVAL & DESIGNATING SCHOOL ADMIN */}
-      {teacherModalSchool && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            {/* Modal Header */}
-            <div className="p-5 sm:p-6 border-b border-slate-200 bg-slate-50/80 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
-                  <UserCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base sm:text-lg font-bold text-slate-900">
-                      รายชื่อคุณครู & อนุมัติการใช้งาน
-                    </h3>
-                    <span className="font-mono text-xs font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
-                      SMIS: {teacherModalSchool.smisCode}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 font-medium">
-                    โรงเรียน: <strong className="text-blue-900">{teacherModalSchool.name}</strong>
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setTeacherModalSchool(null)}
-                className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-5 sm:p-6 overflow-y-auto flex-1 space-y-4">
-              {(() => {
-                const schoolTeachers = allUsers.filter(
-                  (u) => u.schoolId === teacherModalSchool.id || u.schoolSmis === teacherModalSchool.smisCode
-                );
-                const pendingTeachers = schoolTeachers.filter((u) => u.status === 'pending');
-                const approvedTeachers = schoolTeachers.filter((u) => u.status !== 'pending');
-
-                return (
-                  <>
-                    {/* Pending Teachers Alert Banner */}
-                    {pendingTeachers.length > 0 && (
-                      <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 flex items-center justify-between gap-3 shadow-xs">
-                        <div className="flex items-center gap-3">
-                          <span className="relative flex h-3 w-3">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-600"></span>
-                          </span>
-                          <div>
-                            <div className="font-bold text-sm text-amber-900">
-                              มีคำขอสมัครเข้าใช้งานใหม่ที่รอการอนุมัติ ({pendingTeachers.length} คน)
-                            </div>
-                            <div className="text-xs text-amber-800">
-                              กรุณาตรวจสอบและกดปุ่ม &quot;อนุมัติ&quot; หรือ &quot;ตั้งเป็น Admin โรงเรียน&quot; เพื่อเปิดสิทธิ์การใช้งาน
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Teachers List Table */}
-                    <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-                      <table className="w-full text-left text-xs sm:text-sm">
-                        <thead>
-                          <tr className="bg-slate-100 border-b border-slate-200 text-slate-700 font-bold">
-                            <th className="py-3 px-3 w-10 text-center">ที่</th>
-                            <th className="py-3 px-3 min-w-[130px]">เลขบัตร ปชช. / Username</th>
-                            <th className="py-3 px-4 min-w-[160px]">ชื่อ - นามสกุล</th>
-                            <th className="py-3 px-3 min-w-[120px]">ตำแหน่ง / ฝ่าย</th>
-                            <th className="py-3 px-3 text-center w-28">สถานะ</th>
-                            <th className="py-3 px-3 text-center w-32">สิทธิ์ (Role)</th>
-                            <th className="py-3 px-3 text-center min-w-[200px]">การดำเนินการ</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {schoolTeachers.map((u, idx) => (
-                            <tr
-                              key={u.id}
-                              className={
-                                u.status === 'pending'
-                                  ? 'bg-amber-50/60 hover:bg-amber-50 font-medium'
-                                  : 'hover:bg-slate-50/80 transition-colors'
-                              }
-                            >
-                              <td className="py-3 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
-                              <td className="py-3 px-3 font-mono font-bold text-slate-900">
-                                {u.username || u.citizenId}
-                              </td>
-                              <td className="py-3 px-4">
-                                <div className="font-bold text-blue-950">{u.fullName}</div>
-                                <div className="text-[11px] text-slate-500">
-                                  {u.phone && <span>โทร: {u.phone} </span>}
-                                  {u.email && <span>• {u.email}</span>}
-                                </div>
-                              </td>
-                              <td className="py-3 px-3">
-                                <div className="text-slate-800 font-medium">{u.position || 'คุณครู'}</div>
-                                <div className="text-[11px] text-slate-500">{u.department || 'ฝ่ายวิชาการ'}</div>
-                              </td>
-                              <td className="py-3 px-3 text-center">
-                                {u.status === 'pending' ? (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-900 border border-amber-300 animate-pulse">
-                                    <Clock className="w-3 h-3" />
-                                    <span>รออนุมัติ</span>
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-900 border border-emerald-300">
-                                    <CheckCircle2 className="w-3 h-3" />
-                                    <span>อนุมัติแล้ว</span>
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-3 px-3 text-center">
-                                <span
-                                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ${
-                                    u.role === 'admin'
-                                      ? 'bg-blue-600 text-white shadow-xs'
-                                      : u.role === 'director'
-                                      ? 'bg-purple-100 text-purple-900'
-                                      : 'bg-slate-100 text-slate-700'
-                                  }`}
-                                >
-                                  {u.role === 'admin' ? (
-                                    <>
-                                      <ShieldCheck className="w-3 h-3" />
-                                      <span>Admin โรงเรียน</span>
-                                    </>
-                                  ) : u.role === 'director' ? (
-                                    'ผู้อำนวยการ'
-                                  ) : (
-                                    'คุณครู'
-                                  )}
-                                </span>
-                              </td>
-                              <td className="py-3 px-3 text-center">
-                                <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                                  {u.status === 'pending' ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleApproveTeacher(u.id, 'teacher')}
-                                      className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
-                                      title="อนุมัติการใช้งานเป็นคุณครูของโรงเรียน"
-                                    >
-                                      <Check className="w-3.5 h-3.5" />
-                                      <span>อนุมัติครู</span>
-                                    </button>
-                                  ) : (
-                                    u.role !== 'admin' ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleSetSchoolAdmin(u)}
-                                        className="px-2.5 py-1.5 rounded-xl bg-blue-900 hover:bg-blue-800 text-amber-300 font-bold text-xs flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
-                                        title="แต่งตั้งเป็นแอดมินของโรงเรียนนี้"
-                                      >
-                                        <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                                        <span>ตั้งเป็น Admin</span>
-                                      </button>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleApproveTeacher(u.id, 'teacher')}
-                                        className="px-2 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-[11px] cursor-pointer transition-colors"
-                                        title="เปลี่ยนเป็นสิทธิ์ครูปกติ"
-                                      >
-                                        <span>สลับเป็นครูปกติ</span>
-                                      </button>
-                                    )
-                                  )}
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRejectUser(u.id, u.fullName)}
-                                    className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer transition-colors"
-                                    title="ปฏิเสธ / ลบคำขอ"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-
-                          {schoolTeachers.length === 0 && (
-                            <tr>
-                              <td colSpan={7} className="py-10 text-center text-slate-500">
-                                <Users2 className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                                <div className="font-bold text-slate-700">ยังไม่มีคุณครูสมัครเข้าใช้งานในโรงเรียนนี้</div>
-                                <div className="text-xs text-slate-400 mt-0.5">
-                                  คุณครูสามารถใช้รหัส SMIS <code className="font-bold text-amber-700">{teacherModalSchool.smisCode}</code> ในการสมัครเข้าใช้งานได้
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setTeacherModalSchool(null)}
-                className="px-5 py-2.5 rounded-2xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs cursor-pointer transition-colors"
-              >
-                ปิดหน้าต่าง
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 2: SCHOOL FUNDING GROUPS & BUDGET ALLOCATION */}
-      {fundingModalSchool && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            {/* Modal Header */}
-            <div className="p-5 sm:p-6 border-b border-slate-200 bg-gradient-to-r from-blue-900 to-indigo-950 text-white flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold">
-                  <Wallet className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base sm:text-lg font-bold">
-                      รายชื่อกลุ่มทุน & ฝ่ายงานงบประมาณทางโรงเรียน
-                    </h3>
-                  </div>
-                  <p className="text-xs text-blue-200">
-                    {fundingModalSchool.name} (SMIS: {fundingModalSchool.smisCode})
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setFundingModalSchool(null)}
-                className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-5 sm:p-6 overflow-y-auto flex-1 space-y-4">
-              {/* Total Budget Card */}
-              <div className="p-4 rounded-2xl bg-blue-50 border border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-semibold text-blue-800">งบประมาณรวมของโรงเรียน</div>
-                  <div className="text-2xl font-black text-blue-950 font-mono mt-0.5">
-                    {Number(schoolFundingData?.totalBudget || fundingModalSchool.totalBudget || 0).toLocaleString('th-TH', {
-                      minimumFractionDigits: 2,
-                    })}{' '}
-                    <span className="text-sm font-normal text-slate-600">บาท</span>
-                  </div>
-                </div>
-                <div className="text-xs text-blue-700 bg-white/80 px-3 py-1.5 rounded-xl border border-blue-100">
-                  <span>สถานะโรงเรียน: </span>
-                  <strong className="text-emerald-700">
-                    {fundingModalSchool.isActive !== false ? 'เปิดใช้งานปกติ' : 'ระงับการใช้'}
-                  </strong>
-                </div>
-              </div>
-
-              {/* Funding Groups / Allocations Cards */}
-              <div>
-                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <PieChart className="w-4 h-4 text-blue-600" />
-                  <span>สัดส่วนและรายชื่อกลุ่มทุน / ฝ่ายงานบริหารงบประมาณ</span>
-                </h4>
-
-                {schoolFundingData?.loading ? (
-                  <div className="py-12 text-center text-slate-400">
-                    <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-blue-600" />
-                    <div>กำลังโหลดข้อมูลกลุ่มทุนและงบประมาณ...</div>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {(schoolFundingData?.allocations || []).map((alloc, idx) => (
-                      <div
-                        key={alloc.id || idx}
-                        className="p-4 rounded-2xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-colors space-y-2"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
-                            <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0" />
-                            <span>{alloc.departmentName || `กลุ่มทุนที่ ${idx + 1}`}</span>
-                          </span>
-                          <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-900">
-                            {alloc.percentage || 0}%
-                          </span>
-                        </div>
-                        <div className="text-xs text-slate-600 line-clamp-2">
-                          {alloc.description || 'กลุ่มงานบริหารและจัดสรรงบประมาณตามแผนปฏิบัติการ'}
-                        </div>
-                        <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs">
-                          <span className="text-slate-500">งบจัดสรร:</span>
-                          <span className="font-mono font-bold text-slate-900">
-                            {Number(alloc.allocatedAmount || 0).toLocaleString('th-TH', {
-                              minimumFractionDigits: 2,
-                            })}{' '}
-                            บาท
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setFundingModalSchool(null)}
-                className="px-5 py-2.5 rounded-2xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs cursor-pointer transition-colors"
-              >
-                ปิดหน้าต่าง
-              </button>
             </div>
           </div>
         </div>

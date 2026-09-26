@@ -21,8 +21,9 @@ CREATE TABLE IF NOT EXISTS `super_admins` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางผู้ดูแลระบบส่วนกลาง Super Admin';
 
-INSERT IGNORE INTO `super_admins` (`id`, `username`, `password_hash`, `full_name`, `email`)
-VALUES (1, 'peyarm', '1-6', 'ผู้ดูแลระบบส่วนกลาง (Super Admin)', 'peyarm@obec.mail.go.th');
+INSERT INTO `super_admins` (`id`, `username`, `password_hash`, `full_name`, `email`)
+VALUES (1, 'peyarm', '1-6', 'ผู้ดูแลระบบส่วนกลาง (Super Admin)', 'peyarm@obec.mail.go.th')
+ON DUPLICATE KEY UPDATE username = VALUES(username);
 
 -- 1. ตารางข้อมูลโรงเรียน (schools) - รองรับ Multi-Tenant และรหัสสมัคร SMIS 8 หลัก
 CREATE TABLE IF NOT EXISTS `schools` (
@@ -49,7 +50,7 @@ CREATE TABLE IF NOT EXISTS `schools` (
   `student_count` INT UNSIGNED DEFAULT 0 COMMENT 'จำนวนนักเรียน',
   `project_count` INT UNSIGNED DEFAULT 0 COMMENT 'จำนวนโครงการ',
   `total_budget` DECIMAL(15,2) DEFAULT 0.00 COMMENT 'งบประมาณรวม',
-  `logo_url` LONGTEXT DEFAULT NULL COMMENT 'โลโก้โรงเรียน (รองรับ base64 data url และ web url)',
+  `logo_url` LONGTEXT DEFAULT NULL COMMENT 'โลโก้โรงเรียนหรือ URL รูปภาพ',
   `notes` TEXT DEFAULT NULL COMMENT 'หมายเหตุ / บันทึกการเปิดใช้งาน',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -69,6 +70,10 @@ CREATE TABLE IF NOT EXISTS `fiscal_years` (
   `end_date` DATE NOT NULL COMMENT 'วันที่สิ้นสุดปีงบประมาณ (30 ก.ย.)',
   `total_students` INT UNSIGNED DEFAULT 0 COMMENT 'จำนวนนักเรียนทั้งหมด',
   `teacher_count` INT UNSIGNED DEFAULT 0 COMMENT 'จำนวนครูและบุคลากร',
+  `is_proposal_open` TINYINT(1) DEFAULT 1,
+  `proposal_open_date` DATE DEFAULT NULL,
+  `proposal_close_date` DATE DEFAULT NULL,
+  `proposal_notice` TEXT DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -107,8 +112,8 @@ CREATE TABLE IF NOT EXISTS `students` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,
-  `grade_level` VARCHAR(50) NOT NULL COMMENT 'ระดับชั้น (อ.1 - ป.6, ม.1 - ม.6)',
-  `stage` VARCHAR(50) NOT NULL DEFAULT 'ประถม' COMMENT 'ช่วงชั้น: อนุบาล, ประถม, มัธยมต้น, มัธยมปลาย',
+  `grade_level` VARCHAR(50) NOT NULL COMMENT 'ระดับชั้น (อ.1 - ป.6)',
+  `stage` ENUM('อนุบาล', 'ประถม', 'มัธยม') NOT NULL DEFAULT 'ประถม',
   `male_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'ชาย',
   `female_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'หญิง',
   `total_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'รวม',
@@ -125,7 +130,7 @@ CREATE TABLE IF NOT EXISTS `revenues` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,
-  `category` ENUM('subsidy', 'activity', 'welfare', 'lunch', 'fundraising', 'revenue', 'other') NOT NULL,
+  `category` VARCHAR(50) NOT NULL DEFAULT 'subsidy' COMMENT 'รวม small_school สำหรับเงินเพิ่มโรงเรียนขนาดเล็ก',
   `item_name` VARCHAR(255) NOT NULL COMMENT 'รายการรายรับ',
   `rate_per_head` DECIMAL(12, 2) NOT NULL DEFAULT 0.00 COMMENT 'อัตราต่อคน (บาท)',
   `eligible_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'จำนวนผู้มีสิทธิ์ (คน)',
@@ -151,6 +156,7 @@ CREATE TABLE IF NOT EXISTS `budget_allocations` (
   `remaining_amount` DECIMAL(14, 2) NOT NULL DEFAULT 0.00 COMMENT 'จำนวนเงินคงเหลือ',
   `color_hex` VARCHAR(20) DEFAULT '#2563eb',
   `description` TEXT DEFAULT NULL COMMENT 'ขอบข่ายภารกิจ',
+  `reserve_type` VARCHAR(20) DEFAULT NULL COMMENT 'utility หรือ other สำหรับเงินกันไว้ก่อนจัดสรร',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -158,17 +164,27 @@ CREATE TABLE IF NOT EXISTS `budget_allocations` (
   CONSTRAINT `fk_alloc_fy` FOREIGN KEY (`fiscal_year_id`) REFERENCES `fiscal_years` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ตารางจัดสรรงบประมาณตามฝ่าย';
 
+CREATE TABLE IF NOT EXISTS `budget_settings` (
+  `school_id` INT UNSIGNED NOT NULL,
+  `fiscal_year_id` INT UNSIGNED NOT NULL,
+  `carryover` DECIMAL(14,2) NOT NULL DEFAULT 0,
+  `manual_total` DECIMAL(14,2) DEFAULT NULL,
+  `learner_initialized` TINYINT(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`school_id`, `fiscal_year_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 7. ตารางงบกิจกรรมพัฒนาผู้เรียน (learner_activities)
 CREATE TABLE IF NOT EXISTS `learner_activities` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `school_id` INT UNSIGNED NOT NULL,
   `fiscal_year_id` INT UNSIGNED NOT NULL,
-  `activity_name` VARCHAR(255) NOT NULL COMMENT 'ชื่อกิจกรรมพัฒนาผู้เรียน 4 กิจกรรมหลัก สพฐ.',
+  `activity_name` VARCHAR(255) NOT NULL COMMENT 'ชื่อกิจกรรมพัฒนาผู้เรียนตามแผนของโรงเรียน',
   `percentage` DECIMAL(5, 2) NOT NULL DEFAULT 0.00 COMMENT 'เปอร์เซ็นต์การจัดสรร (รวม 100%)',
   `allocated_amount` DECIMAL(14, 2) NOT NULL DEFAULT 0.00 COMMENT 'จำนวนเงินที่ได้รับ',
   `spent_amount` DECIMAL(14, 2) NOT NULL DEFAULT 0.00 COMMENT 'ใช้ไปแล้ว',
   `remaining_amount` DECIMAL(14, 2) NOT NULL DEFAULT 0.00 COMMENT 'คงเหลือ',
   `note` TEXT DEFAULT NULL,
+  `description` TEXT DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),

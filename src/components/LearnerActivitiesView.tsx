@@ -1,321 +1,128 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Sparkles, Save, Plus, Trash2 } from 'lucide-react';
 import { LearnerActivity, FiscalYear, RevenueItem } from '../types';
-import { Sparkles, CheckCircle2, AlertTriangle, Save, Check, Plus, Trash2, HelpCircle } from 'lucide-react';
 
-interface LearnerActivitiesViewProps {
+interface Props {
   activities: LearnerActivity[];
+  activitiesInitialized: boolean;
   activeFiscalYear: FiscalYear;
   revenues: RevenueItem[];
-  onUpdateActivities: (updated: LearnerActivity[]) => void;
+  onUpdateActivities: (rows: LearnerActivity[]) => Promise<boolean>;
 }
-
-export const LearnerActivitiesView: React.FC<LearnerActivitiesViewProps> = ({
-  activities,
-  activeFiscalYear,
-  revenues,
-  onUpdateActivities,
-}) => {
-  const [list, setList] = useState<LearnerActivity[]>([...activities]);
-  const [savedSuccess, setSavedSuccess] = useState(false);
-
-  // Find the revenue items for learner activities across all stages
-  const learnerRevTotal = revenues
-    .filter((r) => r.category === 'activity' || r.itemName.includes('กิจกรรมพัฒนาผู้เรียน'))
-    .reduce((sum, r) => sum + (Number(r.calculatedAmount) || 0), 0);
-  const defaultTotal = learnerRevTotal > 0 ? learnerRevTotal : 110000;
-  const [totalPool, setTotalPool] = useState<number>(defaultTotal);
-
-  const totalPercentage = Math.round(list.reduce((sum, a) => sum + (Number(a.percentage) || 0), 0) * 100) / 100;
-  const isHundredPercent = Math.abs(totalPercentage - 100) < 0.01;
-
-  const handlePercentageChange = (id: number, val: string) => {
-    const pct = Math.max(0, parseFloat(val) || 0);
-    setList((prev) =>
-      prev.map((item) => {
-        if (item.id === id) {
-          const newAlloc = Math.round((totalPool * pct) / 100);
-          return {
-            ...item,
-            percentage: pct,
-            allocatedAmount: newAlloc,
-          };
-        }
-        return item;
-      })
-    );
-  };
-
-  const handleTotalPoolChange = (newTotal: number) => {
-    setTotalPool(newTotal);
-    setList((prev) =>
-      prev.map((item) => {
-        const newAlloc = Math.round((newTotal * item.percentage) / 100);
-        return {
-          ...item,
-          allocatedAmount: newAlloc,
-        };
-      })
-    );
-  };
-
-  const handleAddActivity = () => {
-    const newId = list.length > 0 ? Math.max(...list.map((i) => i.id)) + 1 : 1;
-    const newAct: LearnerActivity = {
-      id: newId,
-      schoolId: 1,
-      fiscalYearId: activeFiscalYear.id,
-      activityName: `กิจกรรมพัฒนาผู้เรียนเพิ่มเติมที่ ${list.length + 1}`,
-      percentage: 0,
-      allocatedAmount: 0,
-      spentAmount: 0,
-      remainingAmount: 0,
-      note: '',
-      description: 'ระบุวัตถุประสงค์และกลุ่มเป้าหมาย',
-    };
-    setList((prev) => [...prev, newAct]);
-  };
-
-  const handleRemoveActivity = (id: number) => {
-    if (confirm('ต้องการลบกิจกรรมนี้ใช่หรือไม่?')) {
-      setList((prev) => prev.filter((i) => i.id !== id));
+const templates = [
+  ['กิจกรรมวิชาการ', 'ค่ายวิชาการ เสริมทักษะ และแก้ปัญหาการเรียน'],
+  ['กิจกรรมคุณธรรม จริยธรรม และลูกเสือ/เนตรนารี', 'จิตอาสา พัฒนาคุณลักษณะ และเข้าค่ายพักแรม'],
+  ['กิจกรรมทัศนศึกษา', 'เรียนรู้นอกสถานที่และแหล่งเรียนรู้จริง'],
+  ['กิจกรรมบริการ ICT', 'ส่งเสริมการเรียนรู้เทคโนโลยีสารสนเทศสำหรับนักเรียน'],
+  ['กิจกรรมกรณีสถานการณ์ฉุกเฉิน/โรคอุบัติใหม่', 'การเรียนทางไกลหรือแก้ปัญหาในภาวะวิกฤต'],
+] as const;
+const money = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const round = (n: number) => Math.round(n * 100) / 100;
+const defaults = (fy: FiscalYear): LearnerActivity[] => templates.map(([activityName, description], i) => ({
+  id: -(i + 1), schoolId: fy.schoolId, fiscalYearId: fy.id, activityName, description,
+  percentage: 20, allocatedAmount: 0, spentAmount: 0, remainingAmount: 0, note: '',
+}));
+function startRows(rows: LearnerActivity[], initialized: boolean, fy: FiscalYear): LearnerActivity[] {
+  if (initialized) return rows;
+  if (!rows.length) return defaults(fy);
+  // One-time upgrade of the earlier four-item template. A saved deletion remains deleted.
+  if (rows.length === 4 && !rows.some(a => a.activityName.includes('สถานการณ์ฉุกเฉิน'))) {
+    const fifth = defaults(fy)[4];
+    return [...rows, { ...fifth, id: -1005, percentage: 0 }];
+  }
+  return rows;
+}
+export const LearnerActivitiesView: React.FC<Props> = ({ activities, activitiesInitialized, activeFiscalYear, revenues, onUpdateActivities }) => {
+  const [list, setList] = useState<LearnerActivity[]>(() => startRows(activities, activitiesInitialized, activeFiscalYear));
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [mode, setMode] = useState<'amount' | 'percent'>('amount');
+  const [enteredAmounts, setEnteredAmounts] = useState<Record<number, number>>({});
+  useEffect(() => {
+    const rows = startRows(activities, activitiesInitialized, activeFiscalYear);
+    setList(rows);
+    setEnteredAmounts(Object.fromEntries(rows.map(a => [a.id, Number(a.allocatedAmount || 0)])));
+    setMode(activitiesInitialized ? 'amount' : 'percent');
+  }, [activities, activitiesInitialized, activeFiscalYear.id]);
+  const pool = revenues.filter(r => r.category === 'activity').reduce((sum, r) => sum + Number(r.calculatedAmount || 0), 0);
+  const percent = round(list.reduce((sum, a) => sum + Number(a.percentage || 0), 0));
+  const amounts = mode === 'amount' ? list.map(a => round(enteredAmounts[a.id] ?? 0)) : list.map((a, i) => i === list.length - 1 && Math.abs(percent - 100) <= 0.01
+    ? round(pool - list.slice(0, -1).reduce((sum, row) => sum + round(pool * row.percentage / 100), 0))
+    : round(pool * a.percentage / 100));
+  const allocatedTotal = round(amounts.reduce((sum, amount) => sum + amount, 0));
+  const displayedPercent = mode === 'amount' && pool > 0 ? round(allocatedTotal / pool * 100) : percent;
+  const selectMode = (next: 'amount' | 'percent') => {
+    if (next === mode) return;
+    if (next === 'amount') setEnteredAmounts(Object.fromEntries(list.map((a, i) => [a.id, amounts[i]])));
+    if (next === 'percent' && pool > 0) {
+      let used = 0;
+      setList(previous => previous.map((a, i) => {
+        const value = i === previous.length - 1 ? round(100 - used) : round(amounts[i] / pool * 100);
+        used += value;
+        return { ...a, percentage: value };
+      }));
     }
+    setMode(next);
   };
-
-  const handleSave = () => {
-    if (!isHundredPercent) {
-      if (!confirm(`ยอดรวมเปอร์เซ็นต์ปัจจุบันคือ ${totalPercentage}% (ยังไม่ครบ 100%)\nคุณต้องการบันทึกต่อไปหรือไม่?`)) {
-        return;
-      }
+  const change = (id: number, patch: Partial<LearnerActivity>) =>
+    setList(previous => previous.map(a => a.id === id ? { ...a, ...patch } : a));
+  const add = () => setList(previous => [...previous, {
+    id: Math.min(0, ...previous.map(a => a.id)) - 1,
+    schoolId: activeFiscalYear.schoolId, fiscalYearId: activeFiscalYear.id,
+    activityName: 'กิจกรรมเพิ่มเติม', description: '', percentage: 0, allocatedAmount: 0,
+    spentAmount: 0, remainingAmount: 0, note: '',
+  }]);
+  const save = async () => {
+    setError(null);
+    if (!list.length || list.some(a => !a.activityName.trim()) || (mode === 'percent' && (Math.abs(percent - 100) > 0.01 || list.some(a => a.percentage < 0 || a.percentage > 100)))) {
+      setError('กรุณาระบุชื่อกิจกรรมและปรับสัดส่วนให้รวมครบ 100%'); return;
     }
-    onUpdateActivities(list);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    if (amounts.some(a => !Number.isFinite(a) || a < 0) || Math.abs(allocatedTotal - pool) > 0.009) {
+      setError(`ยอดจัดสรรต้องเท่ากับยอดรายรับ ${money(pool)} บาท (ผลต่าง ${money(round(pool - allocatedTotal))} บาท)`); return;
+    }
+    let percentageUsed = 0;
+    const rows = list.map((a, i) => ({
+      ...a, schoolId: activeFiscalYear.schoolId, fiscalYearId: activeFiscalYear.id,
+      percentage: mode === 'percent' ? a.percentage : i === list.length - 1 ? round(100 - percentageUsed) : (() => { const p = pool ? round(amounts[i] / pool * 100) : round(100 / list.length); percentageUsed += p; return p; })(),
+      allocatedAmount: amounts[i], remainingAmount: round(amounts[i] - Number(a.spentAmount || 0)),
+    }));
+    if (rows.some(a => a.remainingAmount < 0)) { setError('วงเงินที่จัดสรรต้องไม่น้อยกว่ายอดใช้จริง'); return; }
+    if (await onUpdateActivities(rows)) { setSaved(true); setTimeout(() => setSaved(false), 3000); }
+    else setError('บันทึกกิจกรรมลง MySQL ไม่สำเร็จ');
   };
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-200 pb-4">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <Sparkles className="h-6 w-6 text-amber-500" />
-            <span>การจัดสรรงบประมาณกิจกรรมพัฒนาผู้เรียน (4 กิจกรรมหลัก สพฐ.)</span>
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            กิจกรรมวิชาการ, คุณธรรม/ลูกเสือ, ทัศนศึกษา, ICT และกิจกรรมตามบริบทสถานศึกษา
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {savedSuccess && (
-            <div className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
-              <Check className="h-4 w-4" />
-              <span>บันทึกการจัดสรรเรียบร้อยแล้ว</span>
-            </div>
-          )}
-          <button
-            id="btn-save-learner-activities"
-            type="button"
-            onClick={handleSave}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-700 hover:bg-blue-800 px-5 py-2 text-xs font-semibold text-white shadow-sm transition-colors"
-          >
-            <Save className="h-4 w-4" />
-            <span>บันทึกกิจกรรม</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 100% Validation Alert Bar */}
-      <div
-        className={`rounded-xl p-4 border transition-colors ${
-          isHundredPercent
-            ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
-            : 'bg-amber-50 border-amber-300 text-amber-900'
-        }`}
-      >
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            {isHundredPercent ? (
-              <CheckCircle2 className="h-6 w-6 text-emerald-600 shrink-0" />
-            ) : (
-              <AlertTriangle className="h-6 w-6 text-amber-600 shrink-0" />
-            )}
-            <div>
-              <div className="text-sm font-bold">
-                {isHundredPercent ? (
-                  <span>✅ ยอดรวมสัดส่วนกิจกรรมพัฒนาผู้เรียนถูกต้องครบถ้วน (100.00%)</span>
-                ) : (
-                  <span>
-                    ⚠️ แจ้งเตือน: สัดส่วนเปอร์เซ็นต์รวมคือ {totalPercentage.toFixed(2)}% (ต้องเท่ากับ 100%)
-                  </span>
-                )}
-              </div>
-              <p className="text-xs opacity-90">
-                {isHundredPercent
-                  ? 'งบประมาณกิจกรรมพัฒนาผู้เรียนถูกจัดสรรครอบคลุมทั้ง 4 มิติอย่างครบถ้วน'
-                  : `ต้องการอีก ${(100 - totalPercentage).toFixed(2)}% ให้ครบ 100%`}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium">สัดส่วนรวม:</span>
-            <span
-              className={`rounded-lg px-3 py-1 font-mono text-base font-black ${
-                isHundredPercent ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-slate-900'
-              }`}
-            >
-              {totalPercentage.toFixed(2)}%
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Total Budget Source Box */}
-      <div className="rounded-xl bg-white border border-slate-200 p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <label className="text-xs font-bold text-slate-700 block">
-            วงเงินงบประมาณกิจกรรมพัฒนาผู้เรียนรวม (บาท):
-          </label>
-          <p className="text-xs text-slate-500">
-            อ้างอิงจากประมาณการรายรับหมวดเงินกิจกรรมพัฒนาผู้เรียน หรือปรับแต่งได้ตามความเหมาะสม
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <input
-            id="input-learner-budget-total"
-            type="number"
-            min="0"
-            step="1000"
-            value={totalPool}
-            onChange={(e) => handleTotalPoolChange(Number(e.target.value) || 0)}
-            className="w-44 text-right rounded-lg border border-slate-300 py-1.5 px-3 text-sm font-bold font-mono text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={() => handleTotalPoolChange(defaultTotal)}
-            className="text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-2 rounded-lg whitespace-nowrap"
-          >
-            ดึงจากรายรับ ({defaultTotal.toLocaleString()} บ.)
-          </button>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-          <h3 className="text-xs font-semibold text-slate-700">
-            รายการ 4 กิจกรรมหลักตามนโยบาย สพฐ.
-          </h3>
-          <button
-            id="btn-add-learner-act"
-            type="button"
-            onClick={handleAddActivity}
-            className="flex items-center gap-1 text-xs font-semibold text-blue-700 hover:text-blue-900 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-lg transition-colors"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>เพิ่มกิจกรรม</span>
-          </button>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs sm:text-sm">
-            <thead>
-              <tr className="bg-slate-100 border-b border-slate-200 text-slate-700 font-semibold">
-                <th className="py-3 px-4 w-12 text-center">ที่</th>
-                <th className="py-3 px-4 min-w-[240px]">ชื่อกิจกรรมพัฒนาผู้เรียน</th>
-                <th className="py-3 px-4 w-32 text-center">สัดส่วน (%)</th>
-                <th className="py-3 px-4 w-44 text-right bg-amber-50/60 text-amber-950 font-bold">งบประมาณที่จัดสรร (บาท)</th>
-                <th className="py-3 px-4 min-w-[220px]">รายละเอียด / วัตถุประสงค์</th>
-                <th className="py-3 px-4 w-14 text-center">ลบ</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {list.map((act, idx) => (
-                <tr key={act.id} className="hover:bg-slate-50/80 transition-colors">
-                  <td className="py-3 px-4 text-center text-slate-400 font-mono font-medium">
-                    {idx + 1}
-                  </td>
-                  <td className="py-3 px-4 font-semibold text-slate-800">
-                    <input
-                      type="text"
-                      value={act.activityName}
-                      onChange={(e) => {
-                        const name = e.target.value;
-                        setList((prev) => prev.map((a) => (a.id === act.id ? { ...a, activityName: name } : a)));
-                      }}
-                      className="w-full rounded border border-transparent hover:border-slate-300 focus:border-blue-500 py-1 px-2 text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:bg-white"
-                    />
-                  </td>
-                  <td className="py-3 px-4 text-center">
-                    <div className="inline-flex items-center gap-1">
-                      <input
-                        id={`input-act-percent-${act.id}`}
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.5"
-                        value={act.percentage}
-                        onChange={(e) => handlePercentageChange(act.id, e.target.value)}
-                        className="w-20 text-center rounded-lg border border-slate-300 py-1 px-2 text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                      />
-                      <span className="text-slate-500 text-xs">%</span>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4 text-right bg-amber-50/30 font-bold font-mono text-amber-900 text-base">
-                    {act.allocatedAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="py-3 px-4">
-                    <input
-                      type="text"
-                      value={act.description || ''}
-                      onChange={(e) => {
-                        const desc = e.target.value;
-                        setList((prev) => prev.map((a) => (a.id === act.id ? { ...a, description: desc } : a)));
-                      }}
-                      placeholder="ระบุลักษณะกิจกรรม..."
-                      className="w-full rounded border border-transparent hover:border-slate-200 focus:border-blue-300 py-1 px-2 text-xs text-slate-500 focus:outline-none focus:bg-white"
-                    />
-                  </td>
-                  <td className="py-3 px-4 text-center">
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveActivity(act.id)}
-                      className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors"
-                      title="ลบกิจกรรม"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="bg-slate-900 text-white font-bold text-sm">
-                <td colSpan={2} className="py-3.5 px-4 text-right">
-                  ยอดรวมสัดส่วนกิจกรรมพัฒนาผู้เรียน:
-                </td>
-                <td className="py-3.5 px-4 text-center">
-                  <span
-                    className={`inline-block px-2.5 py-0.5 rounded font-mono font-black ${
-                      isHundredPercent ? 'bg-emerald-500 text-white' : 'bg-amber-400 text-slate-900'
-                    }`}
-                  >
-                    {totalPercentage.toFixed(2)}%
-                  </span>
-                </td>
-                <td className="py-3.5 px-4 text-right bg-blue-950 text-amber-300 font-black font-mono text-base">
-                  {list.reduce((s, a) => s + a.allocatedAmount, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </td>
-                <td colSpan={2} className="py-3.5 px-4 text-xs text-slate-400 font-normal">
-                  บาท ({list.length} กิจกรรม)
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
+  return <div className="space-y-5">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-4">
+      <div><h2 className="flex items-center gap-2 text-xl font-bold"><Sparkles className="h-6 w-6 text-amber-500" />กิจกรรมพัฒนาผู้เรียน ปี {activeFiscalYear.year}</h2>
+        <p className="text-sm text-slate-600">แบ่งยอดเงินกิจกรรมพัฒนาผู้เรียนที่บันทึกไว้ให้กิจกรรมหลัก 5 รายการ หรือเพิ่มและลบตามแผนของโรงเรียน</p></div>
+      <button id="btn-save-learner-activities" type="button" onClick={save} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white"><Save className="inline h-4 w-4" /> บันทึกกิจกรรม</button>
     </div>
-  );
+    {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+    {saved && <p className="text-sm text-emerald-700">บันทึกกิจกรรมลง MySQL แล้ว</p>}
+    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">
+      <p>ยอดเงินกิจกรรมพัฒนาผู้เรียนจากเมนูประมาณการรายรับ (ทุกช่วงชั้น): <strong>{money(pool)} บาท</strong></p>
+      <p>สัดส่วนที่จัดสรร: <strong>{displayedPercent.toFixed(2)}%</strong> · จำนวนเงินที่แบ่ง: <strong>{money(allocatedTotal)} บาท</strong> · ยังไม่ได้จัดสรร: <strong>{money(round(pool - allocatedTotal))} บาท</strong></p>
+      {pool === 0 && <p className="text-amber-800">ยังไม่มีรายรับกิจกรรมพัฒนาผู้เรียนที่บันทึกไว้สำหรับปีนี้</p>}
+    </div>
+    <div className="flex flex-wrap items-center gap-2 text-sm"><span>วิธีจัดสรร:</span><button type="button" onClick={() => selectMode('amount')} aria-pressed={mode === 'amount'} className={`rounded border px-3 py-2 ${mode === 'amount' ? 'bg-blue-700 text-white' : 'bg-white'}`}>ระบุจำนวนเงิน (บาท)</button><button type="button" onClick={() => selectMode('percent')} aria-pressed={mode === 'percent'} className={`rounded border px-3 py-2 ${mode === 'percent' ? 'bg-blue-700 text-white' : 'bg-white'}`}>กำหนดเปอร์เซ็นต์</button><span className="text-slate-600">เลือกวิธีที่สะดวกและจัดสรรให้ครบยอดรายรับก่อนบันทึก</span></div>
+    <section className="overflow-x-auto rounded-xl border bg-white">
+      <div className="flex items-center justify-between border-b p-4"><h3 className="font-semibold">รายการกิจกรรม ({list.length})</h3>
+        <button id="btn-add-learner-act" type="button" onClick={add} className="rounded bg-blue-50 px-3 py-2 text-sm text-blue-800"><Plus className="inline h-4 w-4" /> เพิ่มกิจกรรม</button></div>
+      <table className="w-full min-w-[800px] text-sm"><thead className="bg-slate-100"><tr>
+        <th className="p-3 text-left">กิจกรรม</th><th className="p-3 text-right">สัดส่วน (%)</th>
+        <th className="p-3 text-right">จัดสรร (บาท)</th><th className="p-3 text-right">ใช้ไปแล้ว</th>
+        <th className="p-3 text-right">คงเหลือ</th><th className="p-3 text-left">รายละเอียด</th><th className="p-3">ลบ</th>
+      </tr></thead><tbody>{list.map((a, i) => <tr key={a.id} className="border-t">
+        <td className="p-2"><input aria-label="ชื่อกิจกรรม" value={a.activityName} onChange={e => change(a.id, { activityName: e.target.value })} className="w-full rounded border p-2" /></td>
+        <td className="p-2 text-right"><input type="number" min="0" max="100" step="0.01" value={mode === 'amount' ? (pool ? round(amounts[i] / pool * 100) : 0) : a.percentage} disabled={mode === 'amount'} onChange={e => change(a.id, { percentage: Number(e.target.value) || 0 })} aria-label={`สัดส่วน ${a.activityName}`} className="w-24 rounded border p-2 text-right disabled:bg-slate-100" /></td>
+        <td className="p-2 text-right font-semibold"><input type="number" min="0" step="0.01" value={amounts[i]} disabled={mode === 'percent'} onChange={e => setEnteredAmounts(previous => ({ ...previous, [a.id]: e.target.value === '' ? 0 : Number(e.target.value) }))} aria-label={`จำนวนเงิน ${a.activityName}`} className="w-36 rounded border p-2 text-right disabled:bg-slate-100" /></td>
+        <td className="p-2 text-right">{money(Number(a.spentAmount || 0))}</td>
+        <td className="p-2 text-right">{money(Math.max(0, amounts[i] - Number(a.spentAmount || 0)))}</td>
+        <td className="p-2"><input value={a.description || ''} onChange={e => change(a.id, { description: e.target.value })} className="w-full rounded border p-2" /></td>
+        <td className="p-2 text-center"><button type="button" onClick={() => setList(previous => previous.filter(row => row.id !== a.id))} aria-label={'ลบ ' + a.activityName}><Trash2 className="h-4 w-4 text-rose-600" /></button></td>
+      </tr>)}</tbody><tfoot className="bg-slate-900 font-bold text-white"><tr>
+        <td className="p-3">รวมกิจกรรม</td><td className="p-3 text-right">{displayedPercent.toFixed(2)}%</td>
+        <td className="p-3 text-right">{money(allocatedTotal)}</td><td colSpan={4} />
+      </tr></tfoot></table>
+    </section>
+  </div>;
 };

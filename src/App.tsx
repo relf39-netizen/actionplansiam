@@ -18,6 +18,7 @@ import {
   StudentLevel,
   RevenueItem,
   BudgetAllocation,
+  BudgetSettings,
   LearnerActivity,
   Project,
   BudgetTransaction,
@@ -58,7 +59,9 @@ export default function App() {
   const [students, setStudents] = useState<StudentLevel[]>(initialStudentsData);
   const [revenues, setRevenues] = useState<RevenueItem[]>(initialRevenuesData);
   const [allocations, setAllocations] = useState<BudgetAllocation[]>(initialBudgetAllocations);
+  const [budgetSettings, setBudgetSettings] = useState<BudgetSettings>({ carryover: 0, manualTotal: null });
   const [activities, setActivities] = useState<LearnerActivity[]>(initialLearnerActivities);
+  const [activitiesInitialized, setActivitiesInitialized] = useState(false);
   const [projects, setProjects] = useState<Project[]>(initialProjectsData);
   const [transactions, setTransactions] = useState<BudgetTransaction[]>(initialTransactions);
   const [strategies, setStrategies] = useState<Strategy[]>(initialStrategies);
@@ -66,6 +69,7 @@ export default function App() {
   // DB Status
   const [dbStatus, setDbStatus] = useState<any>(null);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Navigation & UI state
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
@@ -104,23 +108,46 @@ export default function App() {
           }
         } catch (e) {}
 
-        // 3. Check saved user session first to determine schoolId
-        let targetSchoolId = 1;
+        // 3. Load stored application data from MySQL
+        const savedSession = JSON.parse(localStorage.getItem('school_current_user') || 'null');
+        const appRes = await fetch(savedSession?.schoolId ? `/api/database?school_id=${savedSession.schoolId}` : '/api/database');
+        if (appRes.ok) {
+          const text = await appRes.text();
+          try {
+            const appJson = JSON.parse(text);
+            if (appJson.success && appJson.data) {
+              const d = appJson.data;
+              if (d.school) setSchool(d.school);
+              if (Array.isArray(d.fiscalYears)) {
+                setFiscalYears(d.fiscalYears);
+                const active = d.fiscalYears.find((fy: FiscalYear) => fy.isActive) || d.fiscalYears[0];
+                if (active) setActiveFiscalYear(active);
+              }
+              if (d.activeFiscalYear) setActiveFiscalYear(d.activeFiscalYear);
+              if (Array.isArray(d.users)) setUsers(d.users);
+              if (Array.isArray(d.students)) setStudents(d.students);
+              if (Array.isArray(d.revenues)) setRevenues(d.revenues);
+              if (Array.isArray(d.allocations)) setAllocations(d.allocations);
+              setBudgetSettings(d.budgetSettings || { carryover: 0, manualTotal: null });
+              if (Array.isArray(d.activities)) setActivities(d.activities);
+              setActivitiesInitialized(d.activitiesInitialized === true);
+              if (Array.isArray(d.projects)) setProjects(d.projects);
+              if (Array.isArray(d.transactions)) setTransactions(d.transactions);
+              if (Array.isArray(d.strategies)) setStrategies(d.strategies);
+            }
+          } catch (e) {}
+        }
+
+        // 4. Restore user session if stored
         try {
           const savedUser = localStorage.getItem('school_current_user');
           if (savedUser) {
             const parsedUser = JSON.parse(savedUser);
             if (parsedUser && parsedUser.id) {
               setCurrentUser(parsedUser);
-              if (parsedUser.schoolId && Number(parsedUser.schoolId) > 0) {
-                targetSchoolId = Number(parsedUser.schoolId);
-              }
             }
           }
         } catch (e) {}
-
-        // 4. Load application data from MySQL for target school and its active fiscal year
-        await loadDataForSchoolAndYear(targetSchoolId);
       } catch (err) {
         console.error('Error fetching initial database state:', err);
       } finally {
@@ -131,78 +158,29 @@ export default function App() {
     fetchInitialData();
   }, []);
 
-  // Helper to load application data for a specific school and fiscal year from MySQL
-  const loadDataForSchoolAndYear = async (targetSchoolId: number, targetFyId?: number) => {
-    try {
-      const url = targetFyId
-        ? `/api/database?school_id=${targetSchoolId}&fiscal_year_id=${targetFyId}`
-        : `/api/database?school_id=${targetSchoolId}`;
-      const appRes = await fetch(url);
-      if (appRes.ok) {
-        const text = await appRes.text();
-        try {
-          const appJson = JSON.parse(text);
-          if (appJson.success && appJson.data) {
-            const d = appJson.data;
-            if (d.school) setSchool(d.school);
-            if (Array.isArray(d.fiscalYears)) {
-              setFiscalYears(d.fiscalYears);
-            }
-            if (d.activeFiscalYear) {
-              setActiveFiscalYear(d.activeFiscalYear);
-            } else if (Array.isArray(d.fiscalYears)) {
-              const active = d.fiscalYears.find((fy: FiscalYear) => fy.isActive) || d.fiscalYears[0];
-              if (active) setActiveFiscalYear(active);
-            }
-            if (Array.isArray(d.users)) setUsers(d.users);
-            // Load students and revenues strictly from MySQL for this school and fiscal year
-            setStudents(Array.isArray(d.students) ? d.students : []);
-            setRevenues(Array.isArray(d.revenues) ? d.revenues : []);
-            if (Array.isArray(d.allocations)) setAllocations(d.allocations);
-            if (Array.isArray(d.activities)) setActivities(d.activities);
-            if (Array.isArray(d.projects)) setProjects(d.projects);
-            if (Array.isArray(d.transactions)) setTransactions(d.transactions);
-            if (Array.isArray(d.strategies)) setStrategies(d.strategies);
-          }
-        } catch (e) {}
-      }
-    } catch (err) {
-      console.error('Error loading data for school and year:', err);
-    }
-  };
-
   // Helper to persist data to server / MySQL
-  const persistToServer = async (overrides: Record<string, any> = {}) => {
+  const persistToServer = async (overrides: Record<string, any> = {}): Promise<boolean> => {
     try {
-      const payload = {
-        school,
-        fiscalYears,
-        activeFiscalYear,
-        users,
-        students,
-        revenues,
-        allocations,
-        activities,
-        projects,
-        transactions,
-        strategies,
-        ...overrides,
-      };
+      const payload = overrides;
 
-      const targetSchoolId = payload.school?.id || 1;
-      const targetFiscalYearId = payload.activeFiscalYear?.id || 1;
-      const res = await fetch(`/api/database?school_id=${targetSchoolId}&fiscal_year_id=${targetFiscalYearId}`, {
+      const targetSchoolId = payload.school?.id || currentUser.schoolId || school.id;
+      const res = await fetch(`/api/database?school_id=${targetSchoolId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        console.error('Server failed to persist to MySQL:', errorData.message || res.statusText);
+      const errorData = await res.json().catch(() => ({}));
+      if (!res.ok || errorData.success !== true) {
+        setSaveError(errorData.message || 'บันทึกข้อมูลลง MySQL ไม่สำเร็จ');
+        return false;
+      } else {
+        setSaveError(null);
+        return true;
       }
     } catch (err) {
-      console.warn('Failed to save to database endpoint:', err);
+      setSaveError('ติดต่อเซิร์ฟเวอร์เพื่อบันทึกข้อมูลไม่ได้');
+      return false;
     }
   };
 
@@ -212,7 +190,7 @@ export default function App() {
   });
 
   // Handle Auth Success from AuthView
-  const handleAuthSuccess = (user: User, loggedSchool?: School, isSuperAdmin?: boolean) => {
+  const handleAuthSuccess = async (user: User, loggedSchool?: School, isSuperAdmin?: boolean) => {
     setCurrentUser(user);
     if (loggedSchool) {
       setSchool(loggedSchool);
@@ -222,11 +200,34 @@ export default function App() {
     localStorage.setItem('school_current_user', JSON.stringify(user));
     if (isSuperAdmin) {
       setActiveTab('super_admin');
+    } else if (user.schoolId) {
+      try {
+        const res = await fetch(`/api/database?school_id=${user.schoolId}`);
+        const result = await res.json();
+        if (res.ok && result.success && result.data) {
+          const d = result.data;
+          if (d.school) setSchool(d.school);
+          if (Array.isArray(d.students)) setStudents(d.students);
+          if (Array.isArray(d.revenues)) setRevenues(d.revenues);
+          if (Array.isArray(d.allocations)) setAllocations(d.allocations);
+          setBudgetSettings(d.budgetSettings || { carryover: 0, manualTotal: null });
+          if (Array.isArray(d.activities)) setActivities(d.activities);
+          setActivitiesInitialized(d.activitiesInitialized === true);
+          if (Array.isArray(d.fiscalYears)) {
+            setFiscalYears(d.fiscalYears);
+            const active = d.fiscalYears.find((fy: FiscalYear) => fy.isActive) || d.fiscalYears[0];
+            if (active) setActiveFiscalYear(active);
+          }
+        }
+      } catch (e) {
+        setSaveError('ไม่สามารถโหลดข้อมูลของโรงเรียนจาก MySQL ได้');
+      }
     }
   };
 
   // Handle Logout
   const handleLogout = () => {
+    void fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
     localStorage.removeItem('school_logged_in');
     localStorage.removeItem('school_current_user');
     setIsLoggedIn(false);
@@ -243,46 +244,54 @@ export default function App() {
   // Count approved active projects
   const approvedProjectsCount = projects.filter((p) => p.approvedBy && p.status !== 'completed').length;
 
-  // Sync revenue amounts when students change across stages
-  const handleUpdateStudents = (updatedList: StudentLevel[]) => {
-    setStudents(updatedList);
-    const newTotal = updatedList.reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+  // Sync revenue amounts when students change
+  const handleUpdateStudents = async (updatedList: StudentLevel[]): Promise<boolean> => {
+    const newTotal = updatedList.reduce((sum, s) => sum + s.totalCount, 0);
 
-    const kinderTotal = updatedList.filter((s) => s.stage === 'อนุบาล').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
-    const primaryTotal = updatedList.filter((s) => s.stage === 'ประถม').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
-    const secLowerTotal = updatedList.filter((s) => s.stage === 'มัธยมต้น').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
-    const secUpperTotal = updatedList.filter((s) => s.stage === 'มัธยมปลาย').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
-
-    // Auto-sync eligible count on stage-dependent or head-count dependent revenue items
+    // Auto-sync eligible count on head-count dependent revenue items
     const updatedRevenues = revenues.map((r) => {
-      if (r.isCustomRate) return r;
-      let targetCount = r.eligibleCount;
-      if (r.itemName.includes('อนุบาล')) {
-        targetCount = kinderTotal;
-      } else if (r.itemName.includes('ประถม')) {
-        targetCount = primaryTotal;
-      } else if (r.itemName.includes('มัธยมต้น') || r.itemName.includes('มัธยมศึกษาตอนต้น')) {
-        targetCount = secLowerTotal;
-      } else if (r.itemName.includes('มัธยมปลาย') || r.itemName.includes('มัธยมศึกษาตอนปลาย')) {
-        targetCount = secUpperTotal;
-      } else if (r.itemName.includes('นักเรียน') || r.category === 'welfare') {
-        targetCount = newTotal;
+      if (r.note?.startsWith('stage:')) {
+        const count = updatedList.filter(s => s.stage === r.note.slice(6)).reduce((sum, s) => sum + s.totalCount, 0);
+        const eligibleCount = r.category === 'small_school' && newTotal >= 120 ? 0 : count;
+        return { ...r, eligibleCount, calculatedAmount: r.ratePerHead * eligibleCount };
       }
-
-      return {
-        ...r,
-        eligibleCount: targetCount,
-        calculatedAmount: Math.round((Number(r.ratePerHead) || 0) * targetCount),
-      };
+      if (!r.isCustomRate && (r.itemName.includes('นักเรียน') || r.id <= 6 || r.id === 8)) {
+        return {
+          ...r,
+          eligibleCount: newTotal,
+          calculatedAmount: Math.round(r.ratePerHead * newTotal),
+        };
+      }
+      return r;
     });
 
-    setRevenues(updatedRevenues);
-    persistToServer({ students: updatedList, revenues: updatedRevenues });
+    const saved = await persistToServer({ students: updatedList, revenues: updatedRevenues, activeFiscalYear });
+    if (saved) {
+      const fresh = await fetch(`/api/database?school_id=${school.id}`).then(r => r.json()).catch(() => null);
+      const actual = fresh?.data?.students;
+      const requestedGrades = updatedList.map(s => s.gradeLevel.trim()).sort();
+      const storedGrades = Array.isArray(actual) ? actual.map((s: StudentLevel) => s.gradeLevel.trim()).sort() : null;
+      if (!storedGrades || JSON.stringify(requestedGrades) !== JSON.stringify(storedGrades)) {
+        setSaveError('ข้อมูลระดับชั้นที่อ่านกลับจาก MySQL ไม่ตรงกับที่บันทึก');
+        return false;
+      }
+      setStudents(actual);
+      setRevenues(fresh.data.revenues || []);
+    }
+    return saved;
   };
 
-  const handleUpdateSchool = (updated: School) => {
-    setSchool(updated);
-    persistToServer({ school: updated });
+  const handleUpdateSchool = async (updated: School): Promise<boolean> => {
+    const saved = await persistToServer({ school: updated });
+    if (saved) {
+      const response = await fetch(`/api/database?school_id=${updated.id}`).then(r => r.json()).catch(() => null);
+      if (!response?.success || !response.data?.school) {
+        setSaveError('บันทึกแล้วแต่ไม่สามารถตรวจสอบข้อมูลโรงเรียนจาก MySQL ได้');
+        return false;
+      }
+      setSchool(response.data.school);
+    }
+    return saved;
   };
 
   const handleUpdateProjects = (updated: Project[]) => {
@@ -290,19 +299,39 @@ export default function App() {
     persistToServer({ projects: updated });
   };
 
-  const handleUpdateAllocations = (updated: BudgetAllocation[]) => {
-    setAllocations(updated);
-    persistToServer({ allocations: updated });
+  const handleUpdateAllocations = async (updated: BudgetAllocation[], settings: BudgetSettings = budgetSettings): Promise<boolean> => {
+    const saved = await persistToServer({ allocations: updated, budgetSettings: settings, activeFiscalYear });
+    if (!saved) return false;
+    const fresh = await fetch(`/api/database?school_id=${school.id}`).then(r => r.json()).catch(() => null);
+    if (!fresh?.success || !Array.isArray(fresh.data?.allocations)) {
+      setSaveError('บันทึกแล้วแต่ตรวจสอบการจัดสรรจาก MySQL ไม่สำเร็จ');
+      return false;
+    }
+    setAllocations(fresh.data.allocations);
+    setBudgetSettings(fresh.data.budgetSettings || settings);
+    return true;
   };
 
-  const handleUpdateRevenues = (updated: RevenueItem[]) => {
-    setRevenues(updated);
-    persistToServer({ revenues: updated });
+  const handleUpdateRevenues = async (updated: RevenueItem[]): Promise<boolean> => {
+    const saved = await persistToServer({ revenues: updated, activeFiscalYear });
+    if (saved) {
+      const fresh = await fetch(`/api/database?school_id=${school.id}`).then(r => r.json()).catch(() => null);
+      setRevenues(fresh?.data?.revenues || updated);
+    }
+    return saved;
   };
 
-  const handleUpdateActivities = (updated: LearnerActivity[]) => {
-    setActivities(updated);
-    persistToServer({ activities: updated });
+  const handleUpdateActivities = async (updated: LearnerActivity[]): Promise<boolean> => {
+    const saved = await persistToServer({ activities: updated, activeFiscalYear });
+    if (!saved) return false;
+    const fresh = await fetch(`/api/database?school_id=${school.id}`).then(r => r.json()).catch(() => null);
+    if (!fresh?.success || !Array.isArray(fresh.data?.activities) || fresh.data.activities.length !== updated.length) {
+      setSaveError('บันทึกแล้วแต่ตรวจสอบกิจกรรมจาก MySQL ไม่สำเร็จ');
+      return false;
+    }
+    setActivities(fresh.data.activities);
+    setActivitiesInitialized(true);
+    return true;
   };
 
   const handleUpdateTransactions = (updatedTrans: BudgetTransaction[], updatedProjects: Project[]) => {
@@ -335,31 +364,41 @@ export default function App() {
     );
   };
 
-  // Handle adding a new fiscal year
-  const handleAddFiscalYear = (yearNum: number) => {
-    const newId = fiscalYears.length + 1;
-    const newFy: FiscalYear = {
-      id: newId,
-      schoolId: 1,
-      year: yearNum,
-      startDate: `${yearNum - 543 - 1}-10-01`,
-      endDate: `${yearNum - 543}-09-30`,
-      isActive: true,
-      teacherCount: 15,
-      isProposalOpen: true,
-      proposalOpenDate: `${yearNum - 543 - 1}-10-01`,
-      proposalCloseDate: `${yearNum - 543}-01-31`,
-      proposalNotice: `เปิดรับการเสนอโครงการตามแผนปฏิบัติการประจำปีงบประมาณ พ.ศ. ${yearNum}`,
-    };
-    setFiscalYears((prev) => [...prev.map((y) => ({ ...y, isActive: false })), newFy]);
-    setActiveFiscalYear(newFy);
+  const saveFiscalYear = async (action: 'create' | 'select' | 'update', year: number, fiscalYear?: FiscalYear): Promise<boolean> => {
+    try {
+      const schoolId = school.id;
+      if (!schoolId) throw new Error('กรุณาเลือกโรงเรียนก่อนตั้งปีงบประมาณ');
+      const res = await fetch('/api/fiscal-years', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, year, schoolId, fiscalYear }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) throw new Error(result.message || 'บันทึกปีงบประมาณไม่สำเร็จ');
+      const refreshed = await fetch(`/api/database?school_id=${schoolId}`);
+      const data = await refreshed.json();
+      if (!refreshed.ok || !data.success || !data.data) throw new Error('บันทึกแล้วแต่โหลดข้อมูลปีงบประมาณกลับไม่สำเร็จ');
+      const d = data.data;
+      setFiscalYears(d.fiscalYears || []);
+      const selected = d.fiscalYears?.find((fy: FiscalYear) => fy.isActive) || d.fiscalYears?.[0];
+      if (action !== 'update' && selected?.year !== year) throw new Error('ปีงบประมาณที่อ่านกลับจาก MySQL ไม่ตรงกับที่เลือก');
+      if (selected) setActiveFiscalYear(selected);
+      if (d.school) setSchool(d.school);
+      setStudents(d.students || []);
+      setRevenues(d.revenues || []);
+      setAllocations(d.allocations || []);
+      setBudgetSettings(d.budgetSettings || { carryover: 0, manualTotal: null });
+      setActivities(d.activities || []);
+      setActivitiesInitialized(d.activitiesInitialized === true);
+      setSaveError(null);
+      return true;
+    } catch (err: any) {
+      setSaveError(err.message || 'บันทึกปีงบประมาณลง MySQL ไม่สำเร็จ');
+      return false;
+    }
   };
-
-  // Handle updating an existing fiscal year (e.g. proposal open/close settings)
-  const handleUpdateFiscalYear = (updatedFy: FiscalYear) => {
-    setFiscalYears((prev) => prev.map((fy) => (fy.id === updatedFy.id ? updatedFy : fy)));
-    setActiveFiscalYear(updatedFy);
-  };
+  const handleAddFiscalYear = (yearNum: number) => saveFiscalYear('create', yearNum);
+  const handleSelectFiscalYear = (fy: FiscalYear) => saveFiscalYear('select', fy.year);
+  const handleUpdateFiscalYear = (updatedFy: FiscalYear) => saveFiscalYear('update', updatedFy.year, updatedFy);
 
   // Handle restoring data from backup JSON
   const handleRestoreData = (backup: any) => {
@@ -437,6 +476,11 @@ export default function App() {
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 custom-scrollbar">
           <div className="max-w-7xl mx-auto">
+            {saveError && (
+              <div role="alert" className="mb-6 p-4 rounded-xl border border-red-300 bg-red-50 text-red-900">
+                บันทึกข้อมูลไม่สำเร็จ: {saveError}
+              </div>
+            )}
             {/* MySQL Connection Status Banner for School Users */}
             {dbStatus && !dbStatus.connected && (
               <div className="mb-6 p-4 rounded-2xl border border-amber-300 bg-amber-50 text-amber-900 shadow-sm flex items-center gap-3">
@@ -446,14 +490,14 @@ export default function App() {
                 <div>
                   <div className="flex items-center gap-2">
                     <h4 className="text-sm font-bold text-amber-950">
-                      ระบบบันทึกข้อมูลด้วยระบบสำรอง (Local Storage)
+                      ไม่สามารถเชื่อมต่อฐานข้อมูล MySQL
                     </h4>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-200 text-amber-900">
-                      พร้อมใช้งาน
+                      ต้องตรวจสอบ
                     </span>
                   </div>
                   <p className="text-xs text-amber-800 mt-0.5">
-                    คุณครูสามารถบันทึกข้อมูลและใช้งานได้ตามปกติ (หากต้องการเชื่อมต่อฐานข้อมูล MySQL ส่วนกลาง โปรดติดต่อ Super Admin)
+                    ข้อมูลที่กรอกจะยังไม่บันทึกลงฐานข้อมูล กรุณาติดต่อ Super Admin เพื่อตรวจสอบการเชื่อมต่อ
                   </p>
                 </div>
               </div>
@@ -496,8 +540,8 @@ export default function App() {
             {activeTab === 'students' && (
               <StudentDataView
                 students={students}
+                revenues={revenues}
                 activeFiscalYear={activeFiscalYear}
-                school={school}
                 onUpdateStudents={handleUpdateStudents}
                 onUpdateFiscalYear={handleUpdateFiscalYear}
               />
@@ -506,9 +550,9 @@ export default function App() {
             {activeTab === 'revenue' && (
               <RevenueView
                 revenues={revenues}
+                students={students}
                 activeFiscalYear={activeFiscalYear}
                 totalStudents={totalStudents}
-                students={students}
                 onUpdateRevenues={handleUpdateRevenues}
               />
             )}
@@ -516,8 +560,9 @@ export default function App() {
             {activeTab === 'budget' && (
               <BudgetAllocationView
                 allocations={allocations}
+                budgetSettings={budgetSettings}
                 activeFiscalYear={activeFiscalYear}
-                totalRevenue={totalRevenue}
+                revenues={revenues}
                 onUpdateAllocations={handleUpdateAllocations}
                 onNavigateToBudgetCut={() => setActiveTab('budget_cut')}
               />
@@ -526,6 +571,7 @@ export default function App() {
             {activeTab === 'learner_activities' && (
               <LearnerActivitiesView
                 activities={activities}
+                activitiesInitialized={activitiesInitialized}
                 activeFiscalYear={activeFiscalYear}
                 revenues={revenues}
                 onUpdateActivities={handleUpdateActivities}
@@ -537,9 +583,22 @@ export default function App() {
                 school={school}
                 fiscalYear={activeFiscalYear}
                 strategies={strategies}
+                allocations={allocations}
                 users={users}
-                onSaveToProjects={(newProject) => {
-                  handleUpdateProjects([newProject, ...projects]);
+                currentUser={currentUser}
+                onSaveToProjects={async (newProject) => {
+                  // IDs are global in MySQL, across every school. Pick a 32-bit ID
+                  // outside the sequential seed range and verify after saving.
+                  const nextId = 1000000000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 3000000000);
+                  const project = { ...newProject, id: nextId };
+                  if (!await persistToServer({ projects: [project, ...projects] })) return false;
+                  const fresh = await fetch(`/api/database?school_id=${school.id}`).then(r => r.json()).catch(() => null);
+                  const persisted = fresh?.success && Array.isArray(fresh.data?.projects)
+                    ? fresh.data.projects.find((p: Project) => Number(p.id) === nextId && p.projectName === project.projectName && Number(p.fiscalYearId) === Number(project.fiscalYearId))
+                    : null;
+                  if (!persisted) { setSaveError('ไม่พบโครงการที่บันทึกใน MySQL'); return false; }
+                  setProjects(fresh.data.projects);
+                  return true;
                 }}
                 onNavigateToProjects={() => setActiveTab('projects')}
               />
@@ -583,6 +642,10 @@ export default function App() {
               <ProjectExpensesView
                 projects={projects}
                 selectedProjectId={selectedProjectIdForExpenses}
+                currentUser={currentUser}
+                transactions={transactions}
+                school={school}
+                activeFiscalYear={activeFiscalYear}
                 onUpdateProjects={handleUpdateProjects}
                 onBackToProjects={() => setActiveTab('projects')}
               />
@@ -624,7 +687,7 @@ export default function App() {
                 school={school}
                 fiscalYears={fiscalYears}
                 activeFiscalYear={activeFiscalYear}
-                onSelectFiscalYear={(fy) => setActiveFiscalYear(fy)}
+                onSelectFiscalYear={handleSelectFiscalYear}
                 onAddFiscalYear={handleAddFiscalYear}
                 onUpdateFiscalYear={handleUpdateFiscalYear}
                 students={students}
@@ -633,7 +696,6 @@ export default function App() {
                 projects={projects}
                 transactions={transactions}
                 onRestoreData={handleRestoreData}
-                onApplyPresetRates={handleApplyPresetRates}
                 onOpenGasModal={() => setIsGasModalOpen(true)}
               />
             )}
@@ -654,6 +716,7 @@ export default function App() {
         isOpen={isGasModalOpen}
         onClose={() => setIsGasModalOpen(false)}
         school={school}
+        currentUser={currentUser}
         fiscalYears={fiscalYears}
         users={users}
         students={students}

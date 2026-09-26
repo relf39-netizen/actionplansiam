@@ -44,6 +44,7 @@ interface GasIntegrationModalProps {
   isOpen: boolean;
   onClose: () => void;
   school: School;
+  currentUser: User;
   fiscalYears: FiscalYear[];
   users: User[];
   students: StudentLevel[];
@@ -59,6 +60,7 @@ export const GasIntegrationModal: React.FC<GasIntegrationModalProps> = ({
   isOpen,
   onClose,
   school,
+  currentUser,
   fiscalYears,
   users,
   students,
@@ -69,8 +71,34 @@ export const GasIntegrationModal: React.FC<GasIntegrationModalProps> = ({
   transactions,
   strategies,
 }) => {
-  const [activeTab, setActiveTab] = useState<'connect' | 'code' | 'guide'>('connect');
+  const [activeTab, setActiveTab] = useState<'connect' | 'code' | 'guide' | 'photos'>('connect');
   const [gasCode, setGasCode] = useState<string>('');
+  const [photoCode, setPhotoCode] = useState('');
+  const [photoUrl, setPhotoUrl] = useState('');
+  const [photoFolderId, setPhotoFolderId] = useState('');
+  const [photoSecret, setPhotoSecret] = useState('');
+  const [photoStatus, setPhotoStatus] = useState('');
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const canConfigurePhotos = currentUser.role === 'admin' || currentUser.role === 'director';
+  useEffect(() => {
+    if (!isOpen) { setPhotoSecret(''); return; }
+    void fetch('/api/project-photos/code').then(r => r.json()).then(result => { if (result.success) setPhotoCode(result.code); }).catch(() => setPhotoStatus('โหลดโค้ดไม่สำเร็จ'));
+    if (canConfigurePhotos) void fetch(`/api/project-photo-settings?schoolId=${school.id}`).then(r => r.json()).then(result => {
+      if (result.success) { setPhotoUrl(result.webAppUrl || ''); setPhotoFolderId(result.folderId || ''); setPhotoStatus(result.configured ? 'โรงเรียนนี้ตั้งค่า Drive แล้ว' : 'ยังไม่ได้ตั้งค่า Drive ของโรงเรียนนี้'); }
+      else setPhotoStatus(result.message || 'อ่านการตั้งค่าไม่สำเร็จ');
+    }).catch(() => setPhotoStatus('อ่านการตั้งค่าไม่สำเร็จ'));
+  }, [isOpen, school.id, canConfigurePhotos]);
+  const savePhotoIntegration = async () => {
+    setPhotoBusy(true); setPhotoStatus('');
+    try {
+      const response = await fetch('/api/project-photo-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schoolId: school.id, folderId: photoFolderId.trim(), webAppUrl: photoUrl.trim(), bridgeSecret: photoSecret.trim() }) });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.message || 'บันทึกไม่สำเร็จ');
+      setPhotoSecret(''); setPhotoStatus(`บันทึกการเชื่อมต่อของ ${school.name} แล้ว`);
+    } catch (error) { setPhotoStatus(error instanceof Error ? error.message : 'บันทึกไม่สำเร็จ'); }
+    finally { setPhotoBusy(false); }
+  };
   const [loadingCode, setLoadingCode] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
@@ -254,7 +282,7 @@ export const GasIntegrationModal: React.FC<GasIntegrationModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base sm:text-lg font-bold">
-                  ระบบเชื่อมต่อ Google Apps Script (Code.gs) & Google Sheets
+                  ศูนย์เชื่อมต่อ Google Apps Script
                 </h3>
                 <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-400/20 text-amber-300 border border-amber-400/40">
                   Google Workspace
@@ -277,7 +305,7 @@ export const GasIntegrationModal: React.FC<GasIntegrationModalProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-slate-200 bg-slate-50 px-6 gap-2 text-xs font-semibold">
+        <div className="flex flex-wrap border-b border-slate-200 bg-slate-50 px-6 gap-2 text-xs font-semibold">
           <button
             type="button"
             onClick={() => setActiveTab('connect')}
@@ -316,10 +344,39 @@ export const GasIntegrationModal: React.FC<GasIntegrationModalProps> = ({
             <HelpCircle className="h-4 w-4" />
             <span>3. ขั้นตอนการติดตั้งบน Google Drive</span>
           </button>
+          <button type="button" onClick={() => setActiveTab('photos')}
+            className={`flex items-center gap-2 border-b-2 px-4 py-3 ${activeTab === 'photos' ? 'border-blue-700 bg-white font-bold text-blue-800' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>
+            <UploadCloud className="h-4 w-4" /> ภาพโครงการ → Drive โรงเรียน
+          </button>
         </div>
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto flex-1 space-y-6">
+          {activeTab === 'photos' && <div className="space-y-4 text-sm text-slate-700">
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+              <h4 className="font-bold text-blue-950">ภาพกิจกรรมของ {school.name}</h4>
+              <p className="mt-1 text-xs">แต่ละโรงเรียนต้องสร้าง Apps Script และเลือกโฟลเดอร์ใน Google Drive ของตนเอง การตั้งค่าของโรงเรียนอื่นจะไม่ถูกนำมาใช้</p>
+            </div>
+            <ol className="list-decimal space-y-1 pl-5 text-xs leading-relaxed">
+              <li>สร้างโฟลเดอร์ภาพกิจกรรมใน Drive ของโรงเรียน แล้วคัดลอก Folder ID จาก URL</li>
+              <li>เปิด <a href="https://script.google.com/" target="_blank" rel="noreferrer" className="font-bold text-blue-700 underline">Google Apps Script</a> ของโรงเรียน สร้างโปรเจ็กต์ใหม่ แล้ววางโค้ดด้านล่างใน Code.gs</li>
+              <li>Project Settings → Script Properties: ตั้ง ROOT_FOLDER_ID เป็น Folder ID และ BRIDGE_SECRET เป็นรหัสสุ่มของโรงเรียนอย่างน้อย 32 ตัวอักษร</li>
+              <li>Deploy → New deployment → Web app → Execute as Me → Anyone แล้วคัดลอก URL /exec มาใส่ด้านล่าง</li>
+            </ol>
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><strong>โค้ด ProjectPhotos.gs</strong><div className="flex gap-2"><button type="button" disabled={!photoCode} onClick={() => void navigator.clipboard.writeText(photoCode)} className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-bold text-white">คัดลอกโค้ด</button><button type="button" disabled={!photoCode} onClick={() => { const url = URL.createObjectURL(new Blob([photoCode], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href = url; a.download = 'ProjectPhotos.gs'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }} className="rounded-lg border px-3 py-1.5 text-xs">ดาวน์โหลด .gs</button></div></div>
+              <pre className="max-h-56 overflow-auto rounded-lg bg-slate-950 p-3 text-[11px] text-slate-100">{photoCode || 'กำลังโหลดโค้ด...'}</pre>
+            </div>
+            {canConfigurePhotos ? <div className="grid gap-3 rounded-xl border border-slate-200 p-4">
+              <label className="text-xs font-bold">Folder ID ของโรงเรียน<input value={photoFolderId} onChange={e => setPhotoFolderId(e.target.value)} placeholder="ID หลัง /folders/ ใน URL" className="mt-1 w-full rounded-lg border border-slate-300 p-2 font-normal" /></label>
+              <label className="text-xs font-bold">URL Web App ของโรงเรียน (ลงท้าย /exec)<input value={photoUrl} onChange={e => setPhotoUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" className="mt-1 w-full rounded-lg border border-slate-300 p-2 font-normal" /></label>
+              <label className="text-xs font-bold">BRIDGE_SECRET ของโรงเรียน (เว้นว่างเพื่อคงรหัสเดิม)<input type="password" autoComplete="new-password" value={photoSecret} onChange={e => setPhotoSecret(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 p-2 font-normal" /></label>
+              <div className="flex flex-wrap gap-2"><button type="button" onClick={() => setPhotoSecret(Array.from(crypto.getRandomValues(new Uint8Array(32)), n => n.toString(16).padStart(2, '0')).join(''))} className="rounded-lg border px-3 py-2 text-xs">สร้างรหัสสุ่ม</button>
+                <button type="button" disabled={!photoSecret} onClick={() => void navigator.clipboard.writeText(photoSecret)} className="rounded-lg border px-3 py-2 text-xs">คัดลอกรหัสไปใส่ Script Properties</button>
+                <button type="button" disabled={photoBusy} onClick={() => void savePhotoIntegration()} className="rounded-lg bg-blue-700 px-4 py-2 text-xs font-bold text-white">บันทึกการเชื่อมต่อโรงเรียนนี้</button></div>
+              {photoStatus && <p role="status" className="text-xs text-blue-900">{photoStatus}</p>}
+            </div> : <p className="rounded-lg bg-amber-50 p-3 text-xs">ผู้ดูแลระบบหรือผู้อำนวยการโรงเรียนเป็นผู้บันทึกการเชื่อมต่อ Drive</p>}
+          </div>}
 
           {/* TAB 1: CONNECT & SYNC */}
           {activeTab === 'connect' && (

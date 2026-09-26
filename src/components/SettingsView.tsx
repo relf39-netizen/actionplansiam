@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   FiscalYear,
   School,
@@ -11,7 +11,7 @@ import {
 import {
   Settings,
   Calendar,
-  Sparkles,
+  Copy,
   Download,
   Upload,
   Database,
@@ -35,16 +35,15 @@ interface SettingsViewProps {
   school: School;
   fiscalYears: FiscalYear[];
   activeFiscalYear: FiscalYear;
-  onSelectFiscalYear: (fy: FiscalYear) => void;
-  onAddFiscalYear: (newYear: number) => void;
-  onUpdateFiscalYear: (updated: FiscalYear) => void;
+  onSelectFiscalYear: (fy: FiscalYear) => Promise<boolean>;
+  onAddFiscalYear: (newYear: number) => Promise<boolean>;
+  onUpdateFiscalYear: (updated: FiscalYear) => Promise<boolean>;
   students: StudentLevel[];
   revenues: RevenueItem[];
   allocations: BudgetAllocation[];
   projects: Project[];
   transactions: BudgetTransaction[];
   onRestoreData: (backupData: any) => void;
-  onApplyPresetRates: () => void;
   onOpenGasModal?: () => void;
 }
 
@@ -61,11 +60,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   projects,
   transactions,
   onRestoreData,
-  onApplyPresetRates,
   onOpenGasModal,
 }) => {
-  const [newYearInput, setNewYearInput] = useState<number>(activeFiscalYear.year + 1);
-  const [presetSuccess, setPresetSuccess] = useState(false);
+  const [currentYearInput, setCurrentYearInput] = useState<number>(school.fiscalYear || activeFiscalYear.year);
+  const [yearError, setYearError] = useState<string | null>(null);
+  const [driveFolderId, setDriveFolderId] = useState('');
+  const [driveUrl, setDriveUrl] = useState('');
+  const [driveSecret, setDriveSecret] = useState('');
+  const [driveCode, setDriveCode] = useState('');
+  const [driveStatus, setDriveStatus] = useState('');
+  const [driveBusy, setDriveBusy] = useState(false);
+  useEffect(() => {
+    void fetch('/api/project-photos/code').then(r => r.json()).then(v => { if (v.success) setDriveCode(v.code); else setDriveStatus(v.message || 'โหลดโค้ดไม่ได้'); }).catch(() => setDriveStatus('โหลดโค้ดไม่ได้'));
+    void fetch(`/api/project-photo-settings?schoolId=${school.id}`).then(r => r.json()).then(v => {
+      if (v.success) { setDriveFolderId(v.folderId || ''); setDriveUrl(v.webAppUrl || ''); setDriveStatus(v.configured ? 'เชื่อมต่อ Drive ของโรงเรียนแล้ว' : 'ยังไม่ได้เชื่อมต่อ Drive'); }
+      else setDriveStatus(v.message || 'อ่านการตั้งค่าไม่ได้');
+    }).catch(() => setDriveStatus('อ่านการตั้งค่าไม่ได้'));
+  }, [school.id]);
+  const downloadDriveCode = () => {
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(new Blob([driveCode], { type: 'text/plain;charset=utf-8' }));
+    link.href = url; link.download = 'ProjectPhotos.gs'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const saveDrive = async () => {
+    setDriveBusy(true); setDriveStatus('กำลังตรวจสอบการเชื่อมต่อ...');
+    try {
+      const r = await fetch('/api/project-photo-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ schoolId: school.id, folderId: driveFolderId.trim(), webAppUrl: driveUrl.trim(), bridgeSecret: driveSecret.trim() }) });
+      const v = await r.json();
+      if (!r.ok || !v.success) throw new Error(v.message || 'บันทึกไม่สำเร็จ');
+      setDriveSecret(''); setDriveStatus('บันทึกและตรวจสอบโฟลเดอร์ Google Drive แล้ว');
+    } catch (e) { setDriveStatus(e instanceof Error ? e.message : 'บันทึกไม่สำเร็จ'); }
+    finally { setDriveBusy(false); }
+  };
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoreSuccess, setRestoreSuccess] = useState(false);
   const [proposalConfigSuccess, setProposalConfigSuccess] = useState(false);
@@ -77,18 +104,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [proposalNotice, setProposalNotice] = useState<string>(
     activeFiscalYear.proposalNotice || `เปิดรับการเสนอโครงการตามแผนปฏิบัติการประจำปีงบประมาณ พ.ศ. ${activeFiscalYear.year} คุณครูและบุคลากรทุกท่านสามารถส่งข้อเสนอโครงการตามกลุ่มงานได้`
   );
+  useEffect(() => setCurrentYearInput(activeFiscalYear.year), [activeFiscalYear.year]);
 
-  const handleAddNewYear = (e: React.FormEvent) => {
+  const handleSetCurrentYear = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newYearInput < 2500 || newYearInput > 2600) {
-      alert('กรุณาระบุปีงบประมาณ พ.ศ. ที่ถูกต้อง');
+    if (!Number.isInteger(currentYearInput) || currentYearInput < 2500 || currentYearInput > 2600) {
+      setYearError('กรุณาระบุปีงบประมาณ พ.ศ. ที่ถูกต้อง');
       return;
     }
-    onAddFiscalYear(newYearInput);
-    setNewYearInput(newYearInput + 1);
+    setYearError(null);
+    if (!await onAddFiscalYear(currentYearInput)) setYearError('ไม่สามารถตั้งปีงบประมาณปัจจุบันใน MySQL ได้');
   };
 
-  const handleSaveProposalConfig = (e: React.FormEvent) => {
+  const handleSaveProposalConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     const updated: FiscalYear = {
       ...activeFiscalYear,
@@ -97,17 +125,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       proposalCloseDate,
       proposalNotice,
     };
-    onUpdateFiscalYear(updated);
-    setProposalConfigSuccess(true);
-    setTimeout(() => setProposalConfigSuccess(false), 3500);
-  };
-
-  const handleApplyPreset = () => {
-    if (confirm('คุณต้องการนำเข้าอัตราเงินอุดหนุนและเกณฑ์จัดสรรมาตรฐาน สพฐ. พ.ศ. 2568 หรือไม่?')) {
-      onApplyPresetRates();
-      setPresetSuccess(true);
-      setTimeout(() => setPresetSuccess(false), 3000);
-    }
+    if (await onUpdateFiscalYear(updated)) {
+      setProposalConfigSuccess(true);
+      setTimeout(() => setProposalConfigSuccess(false), 3500);
+    } else setYearError('ไม่สามารถบันทึกการตั้งค่าปีงบประมาณลง MySQL ได้');
   };
 
   // Export SQL Dump
@@ -227,6 +248,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         
         {/* Panel 1: Fiscal Year Management */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 space-y-4">
+          {yearError && <p role="alert" className="text-sm text-red-700">{yearError}</p>}
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
             <Calendar className="h-5 w-5 text-blue-700" />
             <div>
@@ -246,8 +268,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <button
                     key={fy.id}
                     type="button"
-                    onClick={() => {
-                      onSelectFiscalYear(fy);
+                    onClick={async () => {
+                      setYearError(null);
+                      if (!await onSelectFiscalYear(fy)) {
+                        setYearError('ไม่สามารถตั้งปีงบประมาณปัจจุบันใน MySQL ได้');
+                        return;
+                      }
                       setIsProposalOpen(fy.isProposalOpen !== false);
                       setProposalOpenDate(fy.proposalOpenDate || `${fy.year - 543 - 1}-10-01`);
                       setProposalCloseDate(fy.proposalCloseDate || `${fy.year - 543}-01-31`);
@@ -269,18 +295,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          <form onSubmit={handleAddNewYear} className="pt-3 border-t border-slate-100 space-y-2">
+          <form onSubmit={handleSetCurrentYear} className="pt-3 border-t border-slate-100 space-y-2">
             <label className="text-xs font-semibold text-slate-700 block">
-              เปิดปีงบประมาณใหม่:
+              ตั้งปีงบประมาณปัจจุบัน (เพิ่มปีให้อัตโนมัติหากยังไม่มี):
             </label>
             <div className="flex gap-2">
               <input
                 id="input-new-fiscal-year"
                 type="number"
-                min="2560"
-                max="2580"
-                value={newYearInput}
-                onChange={(e) => setNewYearInput(Number(e.target.value))}
+                min="2500"
+                max="2600"
+                value={currentYearInput}
+                onChange={(e) => setCurrentYearInput(Number(e.target.value))}
                 className="w-36 text-sm font-bold font-mono rounded-lg border border-slate-300 px-3 py-1.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
               <button
@@ -288,7 +314,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 type="submit"
                 className="px-4 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-800 text-xs font-semibold text-white transition-colors"
               >
-                + เพิ่มปีงบประมาณ
+                บันทึกเป็นปีปัจจุบัน
               </button>
             </div>
           </form>
@@ -399,44 +425,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </form>
         </div>
 
-        {/* Panel 3: OBEC Presets & Rates */}
+        {/* Panel 3: School Google Drive */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 space-y-4">
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-            <Sparkles className="h-5 w-5 text-amber-500" />
+            <Database className="h-5 w-5 text-blue-600" />
             <div>
-              <h3 className="text-sm font-semibold text-slate-900">3. อัตราเงินอุดหนุนรายหัวและเกณฑ์มาตรฐาน สพฐ.</h3>
-              <p className="text-xs text-slate-500">เกณฑ์อัตราตามระเบียบกระทรวงศึกษาธิการ (ปรับปรุงทุกปีงบประมาณ)</p>
+              <h3 className="text-sm font-semibold text-slate-900">3. เชื่อมต่อโฟลเดอร์ภาพโครงการใน Google Drive</h3>
+              <p className="text-xs text-slate-500">ใช้บัญชี Drive และโฟลเดอร์ของโรงเรียนนี้เท่านั้น</p>
             </div>
           </div>
-
-          <div className="text-xs space-y-2 text-slate-600 bg-amber-50/60 p-3 rounded-lg border border-amber-200">
-            <div className="font-semibold text-amber-950">เกณฑ์อัตราพื้นฐานต่อคน/ปี (สพฐ.):</div>
-            <ul className="list-disc pl-4 space-y-1 text-[11px] text-amber-900">
-              <li>ก่อนประถมศึกษา (อนุบาล 1-3): 1,800 บาท/คน/ปี</li>
-              <li>ประถมศึกษา (ป.1 - ป.6): 2,050 บาท/คน/ปี</li>
-              <li>เงินอุดหนุนรายหัวส่วนเพิ่ม (โรงเรียนขนาดเล็ก / คุณภาพ): ~500 บาท/คน/ปี</li>
-              <li>ค่าเครื่องแบบนักเรียน: อนุบาล 325 บ. / ประถม 400 บ.</li>
-              <li>ค่าอุปกรณ์การเรียน: อนุบาล 145 บ. / ประถม 220 บ.</li>
-              <li>ค่ากิจกรรมพัฒนาผู้เรียน: อนุบาล 464 บ. / ประถม 518 บ.</li>
-            </ul>
+          <p className="text-xs text-slate-600">สร้างโฟลเดอร์ใน Drive แล้วคัดลอก ID จาก URL → วางโค้ดใน <a className="text-blue-700 underline" href="https://script.google.com/" target="_blank" rel="noreferrer">Google Apps Script</a> → ตั้ง Script Properties: ROOT_FOLDER_ID และ BRIDGE_SECRET → เผยแพร่ Web app (Execute as Me, Anyone) → วาง URL /exec ด้านล่าง</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={!driveCode} onClick={() => void navigator.clipboard.writeText(driveCode).then(() => setDriveStatus('คัดลอกโค้ดแล้ว')).catch(() => setDriveStatus('คัดลอกไม่สำเร็จ โปรดใช้ปุ่มดาวน์โหลด'))} className="flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-2 text-xs text-white disabled:opacity-50"><Copy className="h-4 w-4" />คัดลอกโค้ด ProjectPhotos.gs</button>
+            <button type="button" disabled={!driveCode} onClick={downloadDriveCode} className="flex items-center gap-1 rounded-lg border px-3 py-2 text-xs disabled:opacity-50"><Download className="h-4 w-4" />ดาวน์โหลดโค้ด .gs</button>
           </div>
-
-          {presetSuccess && (
-            <div className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 p-2 rounded-lg">
-              <Check className="h-4 w-4" />
-              <span>ปรับปรุงอัตราและประมาณการรายรับตามเกณฑ์ สพฐ. เรียบร้อยแล้ว</span>
-            </div>
-          )}
-
-          <button
-            id="btn-apply-obec-presets"
-            type="button"
-            onClick={handleApplyPreset}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-amber-400 bg-amber-50 hover:bg-amber-100 text-amber-950 text-xs font-bold transition-colors shadow-2xs"
-          >
-            <Sparkles className="h-4 w-4 text-amber-600" />
-            <span>ปรับใช้อัตรามาตรฐาน สพฐ. พ.ศ. {activeFiscalYear.year} ทันที</span>
-          </button>
+          <label className="block text-xs font-semibold">Folder ID ของโรงเรียน<input value={driveFolderId} onChange={e => setDriveFolderId(e.target.value)} placeholder="ID หลัง /folders/ ใน URL Google Drive" className="mt-1 w-full rounded-lg border p-2 font-normal" /></label>
+          <label className="block text-xs font-semibold">URL Web App (ลงท้าย /exec)<input value={driveUrl} onChange={e => setDriveUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" className="mt-1 w-full rounded-lg border p-2 font-normal" /></label>
+          <label className="block text-xs font-semibold">BRIDGE_SECRET (เว้นว่างถ้าเคยตั้งค่าแล้ว)<input type="password" autoComplete="new-password" value={driveSecret} onChange={e => setDriveSecret(e.target.value)} className="mt-1 w-full rounded-lg border p-2 font-normal" /></label>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setDriveSecret(Array.from(crypto.getRandomValues(new Uint8Array(32)), n => n.toString(16).padStart(2, '0')).join(''))} className="rounded-lg border px-3 py-2 text-xs">สร้างรหัสสุ่ม</button>
+            <button type="button" disabled={!driveSecret} onClick={() => void navigator.clipboard.writeText(driveSecret)} className="rounded-lg border px-3 py-2 text-xs">คัดลอกรหัส</button>
+            <button type="button" disabled={driveBusy} onClick={() => void saveDrive()} className="rounded-lg bg-blue-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">บันทึกและทดสอบการเชื่อมต่อ</button>
+          </div>
+          {driveStatus && <p role="status" className="text-xs text-blue-800">{driveStatus}</p>}
         </div>
 
         {/* Panel 4: Backup & Restore Data */}

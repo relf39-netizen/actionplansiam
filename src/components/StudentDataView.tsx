@@ -1,85 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { StudentLevel, FiscalYear, School } from '../types';
-import { Users, Save, Check, Calculator, RefreshCcw, Info, Plus, Trash2, GraduationCap, School as SchoolIcon, Layers } from 'lucide-react';
+import { StudentLevel, FiscalYear, RevenueItem } from '../types';
+import { Users, Save, Check, Calculator, RefreshCcw, Info, Plus, Trash2, GraduationCap } from 'lucide-react';
 
 interface StudentDataViewProps {
   students: StudentLevel[];
+  revenues: RevenueItem[];
   activeFiscalYear: FiscalYear;
-  school?: School;
-  onUpdateStudents: (updatedList: StudentLevel[]) => void;
+  onUpdateStudents: (updatedList: StudentLevel[]) => Promise<boolean>;
   onUpdateFiscalYear?: (updatedFy: FiscalYear) => void;
 }
 
-const STANDARD_PRIMARY_GRADES: Array<{ gradeLevel: string; stage: 'อนุบาล' | 'ประถม'; rate: number }> = [
-  { gradeLevel: 'อนุบาล 1', stage: 'อนุบาล', rate: 1800 },
-  { gradeLevel: 'อนุบาล 2', stage: 'อนุบาล', rate: 1800 },
-  { gradeLevel: 'อนุบาล 3', stage: 'อนุบาล', rate: 1800 },
-  { gradeLevel: 'ประถมศึกษาปีที่ 1', stage: 'ประถม', rate: 2050 },
-  { gradeLevel: 'ประถมศึกษาปีที่ 2', stage: 'ประถม', rate: 2050 },
-  { gradeLevel: 'ประถมศึกษาปีที่ 3', stage: 'ประถม', rate: 2050 },
-  { gradeLevel: 'ประถมศึกษาปีที่ 4', stage: 'ประถม', rate: 2050 },
-  { gradeLevel: 'ประถมศึกษาปีที่ 5', stage: 'ประถม', rate: 2050 },
-  { gradeLevel: 'ประถมศึกษาปีที่ 6', stage: 'ประถม', rate: 2050 },
-];
-
-const STANDARD_SECONDARY_GRADES: Array<{ gradeLevel: string; stage: 'มัธยมต้น' | 'มัธยมปลาย'; rate: number }> = [
-  { gradeLevel: 'มัธยมศึกษาปีที่ 1', stage: 'มัธยมต้น', rate: 3700 },
-  { gradeLevel: 'มัธยมศึกษาปีที่ 2', stage: 'มัธยมต้น', rate: 3700 },
-  { gradeLevel: 'มัธยมศึกษาปีที่ 3', stage: 'มัธยมต้น', rate: 3700 },
-  { gradeLevel: 'มัธยมศึกษาปีที่ 4', stage: 'มัธยมปลาย', rate: 4100 },
-  { gradeLevel: 'มัธยมศึกษาปีที่ 5', stage: 'มัธยมปลาย', rate: 4100 },
-  { gradeLevel: 'มัธยมศึกษาปีที่ 6', stage: 'มัธยมปลาย', rate: 4100 },
-];
-
 export const StudentDataView: React.FC<StudentDataViewProps> = ({
   students,
+  revenues,
   activeFiscalYear,
-  school,
   onUpdateStudents,
   onUpdateFiscalYear,
 }) => {
-  const currentSchoolId = school?.id || 1;
-
-  // โหลดเฉพาะข้อมูลจริงของโรงเรียนและปีงบประมาณที่เลือก ห้ามเติมชั้นตัวอย่างเองเมื่อมีข้อมูลแล้วหรือถูกลบไปแล้ว
-  const initializeGradeList = (incoming: StudentLevel[]): StudentLevel[] => {
-    const schoolStudents = incoming.filter(
-      (s) => Number(s.fiscalYearId) === Number(activeFiscalYear.id) &&
-             (!s.schoolId || Number(s.schoolId) === Number(currentSchoolId))
-    );
-
-    // หากโรงเรียนมีข้อมูลที่บันทึกไว้แล้วใน MySQL หรือตั้งใจลบจนเหลือเฉพาะประถม ให้คงตามนั้น 100% ห้ามเติมมัธยมกลับมา
-    if (schoolStudents.length > 0) {
-      return schoolStudents;
-    }
-
-    // กรณีข้อมูลส่งมาจาก parent แต่ยังไม่ได้ระบุ fiscalYearId
-    if (incoming.length > 0 && incoming.some((s) => !s.fiscalYearId)) {
-      return incoming.map((s) => ({
-        ...s,
-        schoolId: currentSchoolId,
-        fiscalYearId: activeFiscalYear.id,
-      }));
-    }
-
-    // หากไม่มีข้อมูลเลย (โรงเรียนเปิดใหม่/ปีงบประมาณใหม่) ให้เริ่มต้นด้วยชั้นประถมมาตรฐาน อ.1 - ป.6
-    return STANDARD_PRIMARY_GRADES.map((std, idx) => ({
-      id: idx + 1,
-      schoolId: currentSchoolId,
-      fiscalYearId: activeFiscalYear.id,
-      gradeLevel: std.gradeLevel,
-      stage: std.stage,
-      maleCount: 0,
-      femaleCount: 0,
-      totalCount: 0,
-    }));
-  };
-
-  const [list, setList] = useState<StudentLevel[]>(() => initializeGradeList(students));
+  const [list, setList] = useState<StudentLevel[]>([...students]);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    setList(initializeGradeList(students));
-  }, [students, activeFiscalYear.id, currentSchoolId]);
+    setList([...students]);
+  }, [students, activeFiscalYear.id]);
 
   // Handle male or female count edit
   const handleCountChange = (id: number, field: 'maleCount' | 'femaleCount', val: string) => {
@@ -88,7 +32,7 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
       prev.map((item) => {
         if (item.id === id) {
           const updated = { ...item, [field]: num };
-          updated.totalCount = (field === 'maleCount' ? num : updated.maleCount) + (field === 'femaleCount' ? num : updated.femaleCount);
+          updated.totalCount = updated.maleCount + updated.femaleCount;
           return updated;
         }
         return item;
@@ -96,57 +40,12 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
     );
   };
 
-  // นำเข้าระดับชั้น ประถมศึกษามาตรฐาน สพฐ. (อ.1 - ป.6)
-  const handleImportPrimaryTemplate = () => {
-    if (list.length > 0 && !window.confirm('คุณต้องการรีเซ็ตระดับชั้นเป็นเฉพาะประถมศึกษา (อ.1 - ป.6) หรือไม่?')) {
-      return;
-    }
-    const newList: StudentLevel[] = STANDARD_PRIMARY_GRADES.map((std, idx) => ({
-      id: idx + 1,
-      schoolId: currentSchoolId,
-      fiscalYearId: activeFiscalYear.id,
-      gradeLevel: std.gradeLevel,
-      stage: std.stage,
-      maleCount: 0,
-      femaleCount: 0,
-      totalCount: 0,
-    }));
-    setList(newList);
-  };
-
-  // เพิ่มระดับชั้นมัธยมศึกษา (ม.1 - ม.6) สำหรับโรงเรียนขยายโอกาส/มัธยม
-  const handleAddSecondaryGrades = () => {
-    let maxId = list.length > 0 ? Math.max(...list.map((s) => Number(s.id) || 0)) : 0;
-    const toAdd: StudentLevel[] = [];
-    for (const sec of STANDARD_SECONDARY_GRADES) {
-      const alreadyHas = list.some((item) => item.gradeLevel.trim() === sec.gradeLevel.trim());
-      if (!alreadyHas) {
-        maxId += 1;
-        toAdd.push({
-          id: maxId,
-          schoolId: currentSchoolId,
-          fiscalYearId: activeFiscalYear.id,
-          gradeLevel: sec.gradeLevel,
-          stage: sec.stage,
-          maleCount: 0,
-          femaleCount: 0,
-          totalCount: 0,
-        });
-      }
-    }
-    if (toAdd.length === 0) {
-      alert('มีระดับชั้นมัธยมศึกษา (ม.1 - ม.6) อยู่ในตารางแล้ว');
-      return;
-    }
-    setList((prev) => [...prev, ...toAdd]);
-  };
-
-  // Add a custom new grade level row
+  // Add a new grade level row (e.g. if school opens ม.1-ม.3 or daycare)
   const handleAddGrade = () => {
-    const newId = list.length > 0 ? Math.max(...list.map((s) => Number(s.id) || 0)) + 1 : 1;
+    const newId = list.length > 0 ? Math.max(...list.map((s) => s.id)) + 1 : 1;
     const newRow: StudentLevel = {
       id: newId,
-      schoolId: currentSchoolId,
+      schoolId: 1,
       fiscalYearId: activeFiscalYear.id,
       gradeLevel: `ระดับชั้นเพิ่มเติม ${list.length + 1}`,
       stage: 'ประถม',
@@ -157,79 +56,54 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
     setList((prev) => [...prev, newRow]);
   };
 
+  const handleAddSecondary = () => {
+    const existing = new Set(list.map((s) => s.gradeLevel));
+    const missing = [1, 2, 3, 4, 5, 6].filter((n) => !existing.has(`มัธยมศึกษาปีที่ ${n}`));
+    const firstId = Math.max(0, ...list.map((s) => s.id)) + 1;
+    setList((prev) => [...prev, ...missing.map((n, i) => ({
+      id: firstId + i, schoolId: prev[0]?.schoolId || 1, fiscalYearId: activeFiscalYear.id,
+      gradeLevel: `มัธยมศึกษาปีที่ ${n}`, stage: n <= 3 ? 'มัธยมต้น' as const : 'มัธยมปลาย' as const,
+      maleCount: 0, femaleCount: 0, totalCount: 0,
+    }))]);
+  };
+
   const handleRemoveGrade = (id: number) => {
-    if (window.confirm('ต้องการลบระดับชั้นนี้ใช่หรือไม่? (เมื่อกดบันทึก ข้อมูลจะถูกลบออกจาก MySQL อย่างถาวร)')) {
+    if (confirm('ต้องการลบแถวระดับชั้นนี้ใช่หรือไม่?')) {
       setList((prev) => prev.filter((s) => s.id !== id));
     }
   };
 
   // Grand totals
-  const totalMale = list.reduce((sum, s) => sum + (Number(s.maleCount) || 0), 0);
-  const totalFemale = list.reduce((sum, s) => sum + (Number(s.femaleCount) || 0), 0);
-  const grandTotal = list.reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+  const totalMale = list.reduce((sum, s) => sum + s.maleCount, 0);
+  const totalFemale = list.reduce((sum, s) => sum + s.femaleCount, 0);
+  const grandTotal = list.reduce((sum, s) => sum + s.totalCount, 0);
 
-  // Subtotals by stage
+  // Kindergarten subtotal
   const kinderStudents = list.filter((s) => s.stage === 'อนุบาล');
-  const kinderTotal = kinderStudents.reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+  const kinderTotal = kinderStudents.reduce((sum, s) => sum + s.totalCount, 0);
 
+  // Primary subtotal
   const primaryStudents = list.filter((s) => s.stage === 'ประถม');
-  const primaryTotal = primaryStudents.reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+  const primaryTotal = primaryStudents.reduce((sum, s) => sum + s.totalCount, 0);
+  const lowerTotal = list.filter((s) => s.stage === 'มัธยมต้น').reduce((sum, s) => sum + s.totalCount, 0);
+  const upperTotal = list.filter((s) => s.stage === 'มัธยมปลาย').reduce((sum, s) => sum + s.totalCount, 0);
 
-  const secLowerStudents = list.filter((s) => s.stage === 'มัธยมต้น');
-  const secLowerTotal = secLowerStudents.reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+  // The revenue menu is the only source of rates for this fiscal year.
+  const rate = (stage: StudentLevel['stage'], category: 'subsidy' | 'activity' | 'small_school') =>
+    Number(revenues.find(r => r.category === category && r.note === `stage:${stage}`)?.ratePerHead) || 0;
+  const estimatedSubsidy = list.reduce((sum, s) => sum + s.totalCount * rate(s.stage, 'subsidy'), 0);
+  const estimatedActivity = list.reduce((sum, s) => sum + s.totalCount * rate(s.stage, 'activity'), 0);
+  const smallSchoolEligible = grandTotal > 0 && grandTotal < 120;
+  const estimatedSmallSchool = smallSchoolEligible ? list.reduce((sum, s) => sum + s.totalCount * rate(s.stage, 'small_school'), 0) : 0;
+  const hasConfiguredRates = revenues.some(r => r.note?.startsWith('stage:') && (r.category === 'subsidy' || r.category === 'activity'));
 
-  const secUpperStudents = list.filter((s) => s.stage === 'มัธยมปลาย');
-  const secUpperTotal = secUpperStudents.reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
-
-  // Estimated per-head subsidy from official OBEC rates
-  // อนุบาล: 1,800 | ประถม: 2,050 | มัธยมต้น: 3,700 | มัธยมปลาย: 4,100
-  const estimatedSubsidy =
-    kinderTotal * 1800 +
-    primaryTotal * 2050 +
-    secLowerTotal * 3700 +
-    secUpperTotal * 4100;
-
-  const handleSave = () => {
-    // Preserve schoolId and fiscalYearId on every row
-    const payload = list.map((item) => ({
-      ...item,
-      schoolId: currentSchoolId,
-      fiscalYearId: activeFiscalYear.id,
-      totalCount: Number(item.maleCount || 0) + Number(item.femaleCount || 0),
-    }));
-    onUpdateStudents(payload);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
-  };
-
-  const getStageBadgeStyle = (stage: string) => {
-    switch (stage) {
-      case 'อนุบาล':
-        return 'bg-amber-100 text-amber-900 border border-amber-300';
-      case 'ประถม':
-        return 'bg-blue-100 text-blue-900 border border-blue-300';
-      case 'มัธยมต้น':
-        return 'bg-indigo-100 text-indigo-900 border border-indigo-300';
-      case 'มัธยมปลาย':
-        return 'bg-purple-100 text-purple-900 border border-purple-300';
-      default:
-        return 'bg-slate-100 text-slate-800 border border-slate-300';
-    }
-  };
-
-  const getStageRate = (stage: string) => {
-    switch (stage) {
-      case 'อนุบาล':
-        return 1800;
-      case 'ประถม':
-        return 2050;
-      case 'มัธยมต้น':
-        return 3700;
-      case 'มัธยมปลาย':
-        return 4100;
-      default:
-        return 2050;
-    }
+  const handleSave = async () => {
+    setSaveError(null);
+    const saved = await onUpdateStudents(list);
+    if (saved) {
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } else setSaveError('ไม่สามารถบันทึกจำนวนนักเรียนลง MySQL ได้');
   };
 
   return (
@@ -239,193 +113,112 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
         <div>
           <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <Users className="h-6 w-6 text-blue-700" />
-            <span>ข้อมูลจำนวนนักเรียน (แยกตามระดับชั้น อนุบาล - ม.6)</span>
+            <span>ข้อมูลจำนวนนักเรียน (แยกตามระดับชั้น)</span>
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
-            <span>โรงเรียน: <strong className="text-slate-800">{school?.name || 'โรงเรียนของคุณ'}</strong></span>
-            <span>•</span>
-            <span>ปีงบประมาณ พ.ศ. <strong className="text-blue-700">{activeFiscalYear.year}</strong></span>
-            <span>(บันทึกแยกตามโรงเรียนและปีงบประมาณอย่างสมบูรณ์)</span>
+          <p className="text-xs text-slate-500 mt-0.5">
+            ประจำปีงบประมาณ พ.ศ. {activeFiscalYear.year} (ข้อมูลนี้จะถูกนำไปคำนวณเงินอุดหนุนรายหัวและงบประมาณอัตโนมัติ)
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           {savedSuccess && (
-            <div className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg shadow-xs">
+            <div className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
               <Check className="h-4 w-4" />
-              <span>บันทึกลงฐานข้อมูลและคำนวณเงินอุดหนุนใหม่แล้ว</span>
+              <span>บันทึกและคำนวณยอดเงินใหม่แล้ว</span>
             </div>
           )}
           <button
             id="btn-save-students"
             type="button"
             onClick={handleSave}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-700 hover:bg-blue-800 px-5 py-2 text-xs font-semibold text-white shadow-xs cursor-pointer transition-colors"
+            className="flex items-center gap-1.5 rounded-lg bg-blue-700 hover:bg-blue-800 px-5 py-2 text-xs font-semibold text-white shadow-sm transition-colors"
           >
             <Save className="h-4 w-4" />
-            <span>บันทึกจำนวนนักเรียนลง MySQL</span>
+            <span>บันทึกจำนวนนักเรียน</span>
           </button>
         </div>
       </div>
 
-      {/* Summary KPI Cards across all stages */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        {/* Total Grand */}
-        <div className="col-span-2 sm:col-span-3 lg:col-span-2 rounded-xl bg-gradient-to-br from-blue-950 via-blue-900 to-indigo-900 text-white p-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-blue-200">นักเรียนรวมทั้งหมด</span>
-            <span className="text-[11px] bg-amber-400 text-slate-950 font-bold px-2 py-0.5 rounded-full">
-              ปี {activeFiscalYear.year}
-            </span>
-          </div>
+      {/* Summary KPI Cards */}
+      {saveError && <p role="alert" className="text-sm text-red-700">{saveError}</p>}
+      {!hasConfiguredRates && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">ยังไม่ได้กำหนดอัตราสำหรับปี {activeFiscalYear.year} ในเมนูประมาณการรายรับ ยอดเงินจะแสดงเป็น 0 จนกว่าจะบันทึกอัตรา</p>}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="rounded-xl bg-blue-900 text-white p-4 shadow-sm">
+          <span className="text-xs font-medium text-blue-200">จำนวนนักเรียนทั้งหมดของโรงเรียน</span>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-3xl font-black text-amber-300 font-mono">{grandTotal}</span>
+            <span className="text-3xl font-extrabold text-amber-300">{grandTotal}</span>
             <span className="text-xs text-blue-200">คน</span>
           </div>
-          <div className="mt-2 text-[11px] text-blue-200 flex items-center justify-between border-t border-blue-800/80 pt-2">
-            <span>ชาย: <strong>{totalMale}</strong> คน</span>
-            <span>หญิง: <strong>{totalFemale}</strong> คน</span>
+          <div className="mt-2 text-[11px] text-blue-200">
+            ชาย {totalMale} คน • หญิง {totalFemale} คน
           </div>
         </div>
 
-        {/* 1. Kindergarten */}
-        <div className="rounded-xl bg-white border border-amber-200 p-3.5 shadow-2xs">
-          <div className="flex items-center justify-between text-xs font-bold text-amber-900">
-            <span>ก่อนประถม (อ.1-3)</span>
-            <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+        <div className="rounded-xl bg-white border border-slate-200 p-4 shadow-xs">
+          <span className="text-xs font-medium text-slate-500">ระดับก่อนประถมศึกษา (อนุบาล 1-3)</span>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-2xl font-bold text-slate-800">{kinderTotal}</span>
+            <span className="text-xs text-slate-500">คน ({((kinderTotal / (grandTotal || 1)) * 100).toFixed(1)}%)</span>
           </div>
-          <div className="mt-1.5 flex items-baseline gap-1">
-            <span className="text-2xl font-bold text-slate-900 font-mono">{kinderTotal}</span>
-            <span className="text-xs text-slate-500">คน</span>
-          </div>
-          <div className="mt-2 text-[10px] text-amber-800 border-t border-amber-100 pt-1">
-            อัตรา: 1,800 บ./คน<br />
-            รวม: {(kinderTotal * 1800).toLocaleString()} บ.
+          <div className="mt-2 text-[11px] text-slate-500">
+            อุดหนุน {rate('อนุบาล', 'subsidy').toLocaleString()} · กิจกรรม {rate('อนุบาล', 'activity').toLocaleString()} บ./คน
           </div>
         </div>
 
-        {/* 2. Primary */}
-        <div className="rounded-xl bg-white border border-blue-200 p-3.5 shadow-2xs">
-          <div className="flex items-center justify-between text-xs font-bold text-blue-900">
-            <span>ประถม (ป.1-6)</span>
-            <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+        <div className="rounded-xl bg-white border border-slate-200 p-4 shadow-xs">
+          <span className="text-xs font-medium text-slate-500">ระดับประถมศึกษา (ป.1 - ป.6)</span>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-2xl font-bold text-slate-800">{primaryTotal}</span>
+            <span className="text-xs text-slate-500">คน ({((primaryTotal / (grandTotal || 1)) * 100).toFixed(1)}%)</span>
           </div>
-          <div className="mt-1.5 flex items-baseline gap-1">
-            <span className="text-2xl font-bold text-slate-900 font-mono">{primaryTotal}</span>
-            <span className="text-xs text-slate-500">คน</span>
-          </div>
-          <div className="mt-2 text-[10px] text-blue-800 border-t border-blue-100 pt-1">
-            อัตรา: 2,050 บ./คน<br />
-            รวม: {(primaryTotal * 2050).toLocaleString()} บ.
+          <div className="mt-2 text-[11px] text-slate-500">
+            อุดหนุน {rate('ประถม', 'subsidy').toLocaleString()} · กิจกรรม {rate('ประถม', 'activity').toLocaleString()} บ./คน
           </div>
         </div>
 
-        {/* 3. Lower Secondary */}
-        <div className="rounded-xl bg-white border border-indigo-200 p-3.5 shadow-2xs">
-          <div className="flex items-center justify-between text-xs font-bold text-indigo-950">
-            <span>มัธยมต้น (ม.1-3)</span>
-            <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+        <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 shadow-xs">
+          <span className="text-xs font-medium text-amber-900">ประมาณการจากอัตราที่บันทึกในเมนูรายรับ</span>
+          <div className="mt-2 flex items-baseline gap-1.5">
+            <span className="text-xl font-bold text-amber-950 font-mono">
+              {(estimatedSubsidy + estimatedSmallSchool + estimatedActivity).toLocaleString()}
+            </span>
+            <span className="text-xs text-amber-800">บาท</span>
           </div>
-          <div className="mt-1.5 flex items-baseline gap-1">
-            <span className="text-2xl font-bold text-slate-900 font-mono">{secLowerTotal}</span>
-            <span className="text-xs text-slate-500">คน</span>
-          </div>
-          <div className="mt-2 text-[10px] text-indigo-800 border-t border-indigo-100 pt-1">
-            อัตรา: 3,700 บ./คน<br />
-            รวม: {(secLowerTotal * 3700).toLocaleString()} บ.
-          </div>
-        </div>
-
-        {/* 4. Upper Secondary */}
-        <div className="rounded-xl bg-white border border-purple-200 p-3.5 shadow-2xs">
-          <div className="flex items-center justify-between text-xs font-bold text-purple-950">
-            <span>มัธยมปลาย (ม.4-6)</span>
-            <span className="w-2 h-2 rounded-full bg-purple-500"></span>
-          </div>
-          <div className="mt-1.5 flex items-baseline gap-1">
-            <span className="text-2xl font-bold text-slate-900 font-mono">{secUpperTotal}</span>
-            <span className="text-xs text-slate-500">คน</span>
-          </div>
-          <div className="mt-2 text-[10px] text-purple-800 border-t border-purple-100 pt-1">
-            อัตรา: 4,100 บ./คน<br />
-            รวม: {(secUpperTotal * 4100).toLocaleString()} บ.
+          <div className="mt-2 text-[11px] text-amber-800 flex items-center gap-1">
+            <Info className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+            <span>อุดหนุน {estimatedSubsidy.toLocaleString()} + เงินเพิ่มโรงเรียนขนาดเล็ก {estimatedSmallSchool.toLocaleString()} + กิจกรรม {estimatedActivity.toLocaleString()} บาท</span>
           </div>
         </div>
       </div>
 
-      {/* Estimated Subsidy Banner */}
-      <div className="rounded-xl bg-gradient-to-r from-amber-50 via-orange-50/50 to-amber-100/50 border border-amber-300 p-4 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <div className="p-2 bg-amber-500 text-white rounded-lg shadow-xs shrink-0">
-            <Calculator className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="text-xs font-bold text-amber-950">
-              ประมาณการเงินอุดหนุนรายหัวพื้นฐานรวม 4 ช่วงชั้น (สพฐ.)
-            </div>
-            <div className="text-[11px] text-amber-800 mt-0.5">
-              คำนวณจากเกณฑ์: อนุบาล (1,800 บ.) + ประถม (2,050 บ.) + มัธยมต้น (3,700 บ.) + มัธยมปลาย (4,100 บ.)
-            </div>
-          </div>
-        </div>
-        <div className="text-right">
-          <div className="text-2xl font-black text-amber-950 font-mono">
-            {estimatedSubsidy.toLocaleString()}{' '}
-            <span className="text-sm font-semibold text-amber-900">บาท</span>
-          </div>
-          <div className="text-[11px] text-amber-800">
-            ยอดนี้จะซิงค์ไปยังหน้าประมาณการรายรับอัตโนมัติ
-          </div>
-        </div>
+      <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
+        มัธยมศึกษาตอนต้น (ม.1–ม.3) {lowerTotal} คน · มัธยมศึกษาตอนปลาย (ม.4–ม.6) {upperTotal} คน
       </div>
 
       {/* Student Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-              <Layers className="h-4 w-4 text-blue-700" />
-              <span>ตารางกรอกจำนวนนักเรียนแยกรายชั้น (อนุบาล 1 - ม.6)</span>
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              กรอกจำนวนนักเรียนชายและหญิง ระบบจะคำนวณยอดรวมรายชั้นและประมาณการเงินอุดหนุนรายหัวให้อัตโนมัติ
-            </p>
+            <h3 className="text-sm font-semibold text-slate-900">ตารางกรอกจำนวนนักเรียนแยกรายชั้น</h3>
+            <p className="text-xs text-slate-500">สามารถกรอกตัวเลขนักเรียนชายและหญิง ระบบจะคำนวณยอดรวมรายชั้นและยอดรวมทั้งโรงเรียนอัตโนมัติ</p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleImportPrimaryTemplate}
-              className="text-xs text-blue-700 hover:text-blue-900 bg-blue-50 border border-blue-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1 font-semibold cursor-pointer"
-              title="โหลดเฉพาะระดับชั้นประถมศึกษา อ.1 - ป.6"
-            >
-              <SchoolIcon className="h-3.5 w-3.5" />
-              <span>เฉพาะประถม (อ.1 - ป.6)</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleAddSecondaryGrades}
-              className="text-xs text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1 font-semibold cursor-pointer"
-              title="เพิ่มระดับชั้นมัธยมศึกษา ม.1 - ม.6 สำหรับโรงเรียนขยายโอกาส/มัธยม"
-            >
-              <GraduationCap className="h-3.5 w-3.5" />
-              <span>+ เพิ่มมัธยม (ม.1 - ม.6)</span>
-            </button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={handleAddSecondary} className="text-xs text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-lg font-semibold">เพิ่ม ม.1–ม.6</button>
             <button
               type="button"
               onClick={handleAddGrade}
-              className="text-xs text-slate-700 hover:text-slate-900 bg-slate-50 border border-slate-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1 font-semibold cursor-pointer"
+              className="text-xs text-blue-700 hover:text-blue-900 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-lg flex items-center gap-1 font-semibold"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>+ เพิ่มชั้นพิเศษ</span>
+              <span>เพิ่มระดับชั้น</span>
             </button>
             <button
               type="button"
-              onClick={() => setList(initializeGradeList(students))}
-              className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1 border border-slate-200 px-2.5 py-1.5 rounded-lg bg-white cursor-pointer"
-              title="คืนค่าเดิมจากฐานข้อมูล"
+              onClick={() => setList([...students])}
+              className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1 border border-slate-200 px-3 py-1.5 rounded-lg bg-white"
             >
               <RefreshCcw className="h-3.5 w-3.5" />
-              <span>รีเฟรช</span>
+              <span>รีเซ็ตค่า</span>
             </button>
           </div>
         </div>
@@ -433,21 +226,24 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs sm:text-sm">
             <thead>
-              <tr className="bg-slate-100/80 border-b border-slate-200 text-slate-700 font-semibold">
-                <th className="py-3 px-4 w-14 text-center">ลำดับ</th>
-                <th className="py-3 px-4 min-w-[180px]">ระดับชั้น</th>
-                <th className="py-3 px-4 w-36">ช่วงชั้น</th>
+              <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-700 font-semibold">
+                <th className="py-3 px-4 w-16 text-center">ลำดับ</th>
+                <th className="py-3 px-4">ระดับชั้น</th>
+                <th className="py-3 px-4">ช่วงชั้น</th>
                 <th className="py-3 px-4 text-center w-36">นักเรียนชาย (คน)</th>
                 <th className="py-3 px-4 text-center w-36">นักเรียนหญิง (คน)</th>
                 <th className="py-3 px-4 text-center w-36 bg-blue-50/70 text-blue-900 font-bold">รวม (คน)</th>
-                <th className="py-3 px-4 text-right w-44 text-slate-700">เงินอุดหนุนรายหัว (บาท)</th>
+                <th className="py-3 px-4 text-right w-40 text-slate-600">เงินอุดหนุนรายหัว (บาท)</th>
+                <th className="py-3 px-4 text-right w-40 text-slate-600">เงินเพิ่มโรงเรียนขนาดเล็ก (บาท)</th>
+                <th className="py-3 px-4 text-right w-40 text-slate-600">กิจกรรมพัฒนาผู้เรียน (บาท)</th>
                 <th className="py-3 px-4 w-14 text-center">จัดการ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {list.map((item, idx) => {
-                const rate = getStageRate(item.stage);
-                const rowSubsidy = item.totalCount * rate;
+                const rowSubsidy = item.totalCount * rate(item.stage, 'subsidy');
+                const rowSmallSchool = smallSchoolEligible ? item.totalCount * rate(item.stage, 'small_school') : 0;
+                const rowActivity = item.totalCount * rate(item.stage, 'activity');
                 return (
                   <tr key={item.id} className="hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-4 text-center text-slate-400 font-mono">{idx + 1}</td>
@@ -457,7 +253,7 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
                         value={item.gradeLevel}
                         onChange={(e) => {
                           const val = e.target.value;
-                          setList((prev) => prev.map((s) => (s.id === item.id ? { ...s, gradeLevel: val } : s)));
+                          setList((prev) => prev.map((s) => s.id === item.id ? { ...s, gradeLevel: val } : s));
                         }}
                         className="font-semibold text-slate-800 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 py-0.5 focus:outline-none w-full"
                       />
@@ -466,15 +262,19 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
                       <select
                         value={item.stage}
                         onChange={(e) => {
-                          const val = e.target.value as 'อนุบาล' | 'ประถม' | 'มัธยมต้น' | 'มัธยมปลาย';
-                          setList((prev) => prev.map((s) => (s.id === item.id ? { ...s, stage: val } : s)));
+                          const val = e.target.value as StudentLevel['stage'];
+                          setList((prev) => prev.map((s) => s.id === item.id ? { ...s, stage: val } : s));
                         }}
-                        className={`text-xs rounded-full px-2.5 py-1 font-semibold cursor-pointer ${getStageBadgeStyle(item.stage)}`}
+                        className={`text-xs rounded-full px-2.5 py-1 font-semibold border-0 cursor-pointer ${
+                          item.stage === 'อนุบาล'
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-blue-100 text-blue-800'
+                        }`}
                       >
                         <option value="อนุบาล">อนุบาล</option>
                         <option value="ประถม">ประถม</option>
-                        <option value="มัธยมต้น">มัธยมต้น (ม.1-3)</option>
-                        <option value="มัธยมปลาย">มัธยมปลาย (ม.4-6)</option>
+                        <option value="มัธยมต้น">มัธยมต้น</option>
+                        <option value="มัธยมปลาย">มัธยมปลาย</option>
                       </select>
                     </td>
                     <td className="py-2.5 px-4 text-center">
@@ -500,15 +300,16 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
                     <td className="py-3 px-4 text-center bg-blue-50/50 font-bold text-blue-900 text-base font-mono">
                       {item.totalCount}
                     </td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-800">
-                      <div className="font-bold">{rowSubsidy.toLocaleString()}</div>
-                      <div className="text-[10px] text-slate-400">({rate.toLocaleString()} บ./คน)</div>
+                    <td className="py-3 px-4 text-right font-mono text-slate-700">
+                      {rowSubsidy.toLocaleString()}
                     </td>
+                    <td className="py-3 px-4 text-right font-mono text-slate-700">{rowSmallSchool.toLocaleString()}</td>
+                    <td className="py-3 px-4 text-right font-mono text-slate-700">{rowActivity.toLocaleString()}</td>
                     <td className="py-3 px-4 text-center">
                       <button
                         type="button"
                         onClick={() => handleRemoveGrade(item.id)}
-                        className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                        className="p-1 text-slate-400 hover:text-rose-600 rounded"
                         title="ลบระดับชั้น"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -535,6 +336,8 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
                 <td className="py-3.5 px-4 text-right bg-blue-950 text-amber-300 font-bold font-mono">
                   {estimatedSubsidy.toLocaleString()} บ.
                 </td>
+                <td className="py-3.5 px-4 text-right bg-blue-950 text-amber-300 font-bold font-mono">{estimatedSmallSchool.toLocaleString()} บ.</td>
+                <td className="py-3.5 px-4 text-right bg-blue-950 text-amber-300 font-bold font-mono">{estimatedActivity.toLocaleString()} บ.</td>
                 <td></td>
               </tr>
             </tfoot>

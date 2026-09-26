@@ -1,19 +1,14 @@
 export type UserRole = 'superadmin' | 'admin' | 'director' | 'teacher';
 
 export const TEACHER_POSITIONS = [
-  'ผู้อำนวยการโรงเรียน (ผอ.)',
-  'รองผู้อำนวยการโรงเรียน (รอง ผอ.)',
-  'ผู้อำนวยการโรงเรียน',
-  'รองผู้อำนวยการโรงเรียน',
+  'ครูอัตราจ้าง',
+  'พนักงานราชการ',
+  'เจ้าหน้าที่ธุรการ',
   'ครู',
   'ครูชำนาญการ',
   'ครูชำนาญการพิเศษ',
   'ครูเชี่ยวชาญ',
   'ครูเชี่ยวชาญพิเศษ',
-  'ครูผู้ช่วย',
-  'ครูอัตราจ้าง',
-  'พนักงานราชการ',
-  'เจ้าหน้าที่ธุรการ',
 ] as const;
 
 export type TeacherPosition = (typeof TEACHER_POSITIONS)[number];
@@ -125,7 +120,7 @@ export interface RevenueItem {
   id: number;
   schoolId: number;
   fiscalYearId: number;
-  category: 'subsidy' | 'activity' | 'welfare' | 'lunch' | 'fundraising' | 'revenue' | 'other';
+  category: 'subsidy' | 'activity' | 'small_school' | 'welfare' | 'lunch' | 'fundraising' | 'revenue' | 'other';
   itemName: string;
   ratePerHead: number;
   eligibleCount: number;
@@ -145,6 +140,7 @@ export interface BudgetAllocation {
   remainingAmount: number;
   colorHex: string;
   description: string;
+  reserveType?: 'utility' | 'other';
   isContingency?: boolean; // ระบุว่าเป็นงบกลาง / สำรองจ่ายฉุกเฉิน
   contingencySubItems?: Array<{
     id: string;
@@ -156,6 +152,11 @@ export interface BudgetAllocation {
   isCutConfirmed?: boolean; // ยืนยันการตัดแผนงบประมาณของกลุ่มงาน
   cutConfirmedDate?: string; // วันที่ยืนยันการตัดแผน
   cutConfirmedBy?: string; // ผู้กดยืนยันการตัดแผน
+}
+
+export interface BudgetSettings {
+  carryover: number;
+  manualTotal: number | null;
 }
 
 export interface LearnerActivity {
@@ -212,6 +213,23 @@ export type ProjectExpense = ProjectExpenseItem;
 export type ProjectStatus = 'not_started' | 'in_progress' | 'completed';
 export type ApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 
+export interface ProjectReportPhoto {
+  id: string;
+  dataUrl?: string; // ภาพเดิมก่อนเชื่อม Drive
+  fileId?: string; // ภาพใหม่เก็บใน Google Drive
+  caption: string;
+}
+
+export interface ProjectReport {
+  activityDetails: string;
+  results: string;
+  problems: string;
+  recommendations: string;
+  aiDraft?: string;
+  photos: ProjectReportPhoto[];
+  updatedAt?: string;
+}
+
 export interface Project {
   id: number;
   schoolId: number;
@@ -263,6 +281,7 @@ export interface Project {
   budgetAdjustedDate?: string; // วันที่ปรับเปลี่ยนงบประมาณ
   budgetAdjustmentNote?: string; // บันทึกเหตุผลการปรับเปลี่ยนงบประมาณ
   isBudgetCutConfirmed?: boolean; // สถานะการตัดแผนงบประมาณโครงการได้รับการยืนยันแล้ว
+  report?: ProjectReport;
 }
 
 export interface BudgetTransaction {
@@ -320,4 +339,3 @@ export interface ProjectProposal {
   approvedBy?: string;
   acknowledgedBy?: string;
 }
-

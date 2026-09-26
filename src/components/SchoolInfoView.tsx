@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { School, FiscalYear } from '../types';
 import { Building2, Save, Check, RefreshCw, Upload, Image as ImageIcon } from 'lucide-react';
 
 interface SchoolInfoViewProps {
   school: School;
   activeFiscalYear: FiscalYear;
-  onUpdateSchool: (updated: School) => void;
+  onUpdateSchool: (updated: School) => Promise<boolean>;
 }
 
 export const SchoolInfoView: React.FC<SchoolInfoViewProps> = ({
@@ -16,6 +16,12 @@ export const SchoolInfoView: React.FC<SchoolInfoViewProps> = ({
   const [formData, setFormData] = useState<School>({ ...school });
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState(false);
+
+  // The school arrives asynchronously from MySQL after this view has mounted.
+  useEffect(() => setFormData({ ...school }), [school]);
+  useEffect(() => setPreviewError(false), [formData.logoUrl]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -30,13 +36,13 @@ export const SchoolInfoView: React.FC<SchoolInfoViewProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
-      setUploadError('กรุณาเลือกไฟล์รูปภาพที่ถูกต้อง (PNG, JPG, SVG, WebP)');
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setUploadError('กรุณาเลือกไฟล์ PNG, JPG หรือ WebP');
       return;
     }
 
-    if (file.size > 3 * 1024 * 1024) {
-      setUploadError('ขนาดไฟล์รูปภาพไม่ควรเกิน 3 MB');
+    if (file.size > 1024 * 1024) {
+      setUploadError('ขนาดไฟล์รูปภาพต้องไม่เกิน 1 MB');
       return;
     }
 
@@ -68,11 +74,14 @@ export const SchoolInfoView: React.FC<SchoolInfoViewProps> = ({
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onUpdateSchool(formData);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    setSaveError(null);
+    const saved = await onUpdateSchool(formData);
+    if (saved) {
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } else setSaveError('ไม่สามารถบันทึกข้อมูลโรงเรียนและโลโก้ลง MySQL ได้');
   };
 
   return (
@@ -97,6 +106,7 @@ export const SchoolInfoView: React.FC<SchoolInfoViewProps> = ({
       </div>
 
       <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-slate-200 shadow-xs p-6 space-y-6">
+        {saveError && <p role="alert" className="text-sm text-red-700">{saveError}</p>}
         {/* Logo Configuration Card */}
         <div className="p-5 bg-gradient-to-r from-blue-50/70 via-indigo-50/40 to-slate-50 rounded-xl border border-blue-100 space-y-4">
           <div className="flex items-center justify-between">
@@ -113,12 +123,13 @@ export const SchoolInfoView: React.FC<SchoolInfoViewProps> = ({
             {/* Logo Preview */}
             <div className="relative group">
               <div className="h-24 w-24 rounded-2xl bg-white border-2 border-blue-200 shadow-sm flex items-center justify-center overflow-hidden shrink-0">
-                {formData.logoUrl ? (
+                {formData.logoUrl && !previewError ? (
                   <img
                     src={formData.logoUrl}
                     alt="School Logo"
                     className="h-full w-full object-contain p-1"
                     referrerPolicy="no-referrer"
+                    onError={() => { setPreviewError(true); setUploadError('ไม่สามารถแสดงรูปภาพนี้ได้ กรุณาอัปโหลดไฟล์จากเครื่องหรือใช้ URL ที่เปิดได้'); }}
                   />
                 ) : (
                   <Building2 className="h-12 w-12 text-slate-400" />
@@ -189,7 +200,7 @@ export const SchoolInfoView: React.FC<SchoolInfoViewProps> = ({
                 <p className="text-xs text-red-600 font-medium">{uploadError}</p>
               )}
               <p className="text-[11px] text-slate-500">
-                รองรับไฟล์ PNG, JPG, WebP และ SVG แนะนำรูปภาพทรงสี่เหลี่ยมจัตุรัส ขนาดไม่เกิน 2MB
+                รองรับไฟล์ PNG, JPG และ WebP ขนาดไม่เกิน 1 MB
               </p>
             </div>
           </div>

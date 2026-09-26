@@ -1,3 +1,4 @@
+import { ProjectWorkflow } from './ProjectWorkflow';
 import React, { useState, useEffect } from 'react';
 import { 
   ProjectProposal, 
@@ -7,9 +8,12 @@ import {
   FiscalYear, 
   Strategy, 
   Project,
+  BudgetAllocation,
   User
 } from '../types';
 import { exportProjectProposalToWordDoc } from '../utils/exportUtils';
+import { fiscalMonthRange, normalizeProjectProposal } from '../utils/projectProposalFormat';
+import { fallbackRationale } from '../utils/projectRationale';
 import { 
   Sparkles, 
   Bot, 
@@ -49,8 +53,10 @@ interface AiProjectWriterViewProps {
   school: School;
   fiscalYear: FiscalYear;
   strategies?: Strategy[];
+  allocations?: BudgetAllocation[];
   users?: User[];
-  onSaveToProjects: (newProject: Project) => void;
+  currentUser?: User;
+  onSaveToProjects: (newProject: Project) => Promise<boolean>;
   onNavigateToProjects: () => void;
 }
 
@@ -103,18 +109,22 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
   school,
   fiscalYear,
   strategies = [],
+  allocations = [],
   users = [],
+  currentUser,
   onSaveToProjects,
   onNavigateToProjects,
 }) => {
   // Form input states
   const [projectName, setProjectName] = useState('');
   const [projectType, setProjectType] = useState<'ใหม่' | 'ต่อเนื่อง'>('ใหม่');
-  const [department, setDepartment] = useState('ฝ่ายวิชาการ');
+  const [department, setDepartment] = useState('');
+  const projectDepartments = allocations.filter(a => !a.isContingency && !a.reserveType);
+  const selectedDepartment = projectDepartments.find(a => a.departmentName === department)?.departmentName || projectDepartments[0]?.departmentName || '';
   const [strategyName, setStrategyName] = useState('');
-  const [targetGroup, setTargetGroup] = useState('นักเรียนและครูผู้สอน');
+  const [targetGroup, setTargetGroup] = useState(`นักเรียน${school.name}`);
   const [estimatedBudget, setEstimatedBudget] = useState<number>(30000);
-  const [duration, setDuration] = useState(`ตลอดปีการศึกษา ${fiscalYear.year}`);
+  const [duration, setDuration] = useState(fiscalMonthRange(fiscalYear.year, 1, 12));
   const [specialFocus, setSpecialFocus] = useState('');
   const [promptNotes, setPromptNotes] = useState('');
 
@@ -124,11 +134,11 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
   const [proposerCitizenId, setProposerCitizenId] = useState('');
   const [selectedProposerId, setSelectedProposerId] = useState<string>('custom');
 
-  const [endorserName, setEndorserName] = useState('นายพิเชษฐ์ ปัญญาวงศ์');
+  const [endorserName, setEndorserName] = useState('');
   const [endorserPosition, setEndorserPosition] = useState('หัวหน้ากลุ่มงานวิชาการ');
   const [selectedEndorserId, setSelectedEndorserId] = useState<string>('custom');
 
-  const [approverName, setApproverName] = useState(school.directorName || 'ดร.สมศักดิ์ พัฒนศึกษา');
+  const [approverName, setApproverName] = useState(school.directorName || '');
   const [approverPosition, setApproverPosition] = useState(`ผู้อำนวยการโรงเรียน${school.name}`);
   const [selectedApproverId, setSelectedApproverId] = useState<string>('custom');
 
@@ -138,6 +148,9 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
   const [customApiKey, setCustomApiKey] = useState('');
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [hasSystemKey, setHasSystemKey] = useState<boolean | null>(null);
+  const [keyTest, setKeyTest] = useState<string | null>(null);
+  const [keyTestSuccess, setKeyTestSuccess] = useState(false);
+  const [testingKey, setTestingKey] = useState(false);
 
   // Generation & Results states
   const [isGenerating, setIsGenerating] = useState(false);
@@ -145,6 +158,8 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
   const [generationMessage, setGenerationMessage] = useState<string | null>(null);
   const [proposal, setProposal] = useState<ProjectProposal | null>(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
   const [activeTab, setActiveTab] = useState<'form' | 'preview' | 'edit'>('form');
 
   // Load custom API key from localStorage & check system key
@@ -256,14 +271,34 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
   const handleSaveApiKey = (keyVal: string) => {
     const cleanKey = keyVal.trim();
     setCustomApiKey(cleanKey);
+    setKeyTestSuccess(false);
+    setKeyTest(null);
     localStorage.setItem('gemini_custom_api_key', cleanKey);
     setShowApiKeyModal(false);
+  };
+  const testApiKey = async () => {
+    setTestingKey(true);
+    setKeyTest(null);
+    setKeyTestSuccess(false);
+    try {
+      const response = await fetch('/api/ai/test-key', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customApiKey: customApiKey.trim() || undefined }),
+      });
+      const result = await response.json();
+      setKeyTestSuccess(Boolean(result.success));
+      setKeyTest(result.message || 'ไม่สามารถทดสอบการเชื่อมต่อได้');
+    } catch {
+      setKeyTest('ติดต่อเซิร์ฟเวอร์เพื่อทดสอบ API Key ไม่สำเร็จ');
+    } finally {
+      setTestingKey(false);
+    }
   };
 
   // Apply quick preset
   const handleSelectPreset = (preset: typeof PRESET_TOPICS[0]) => {
     setProjectName(preset.title);
-    setDepartment(preset.dept);
+    setDepartment(projectDepartments.find(a => a.departmentName.includes(preset.dept.replace(/^ฝ่าย/, '')))?.departmentName || selectedDepartment);
     setEstimatedBudget(preset.budget);
     setTargetGroup(preset.target);
     setSpecialFocus(preset.focus);
@@ -291,12 +326,11 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
     const generateClientFallbackProposal = (): ProjectProposal => {
       const pName = projectName.trim() || 'โครงการพัฒนาคุณภาพการศึกษาและศักยภาพผู้เรียน';
       const pType = projectType || 'ใหม่';
-      const dept = department || 'ฝ่ายวิชาการ';
+      const dept = selectedDepartment;
       const strat = strategyName || `ยุทธศาสตร์พัฒนาคุณภาพการศึกษา สพฐ. ปี ${fiscalYear.year}`;
-      const target = targetGroup || 'นักเรียนและคณะครูทุกคน';
+      const target = targetGroup || `นักเรียน${school.name}`;
       const budget = estimatedBudget > 0 ? estimatedBudget : 30000;
-      const dur = duration || 'ตลอดปีการศึกษา 2568';
-      const focus = specialFocus ? `โดยเน้นย้ำประเด็น ${specialFocus} ` : '';
+      const dur = duration || fiscalMonthRange(fiscalYear.year, 1, 12);
 
       const pProposer = proposerName.trim() || 'ครูผู้รับผิดชอบโครงการ';
       const pProposerPos = proposerPosition.trim() || 'ครูผู้รับผิดชอบโครงการ';
@@ -323,7 +357,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
         endorserPosition: pEndorserPos,
         approverName: pApprover,
         approverPosition: pApproverPos,
-        rationale: `สืบเนื่องจากนโยบายสำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.) และกระทรวงศึกษาธิการ ที่มุ่งเน้นการยกระดับคุณภาพการศึกษาและพัฒนาสมรรถนะผู้เรียนในศตวรรษที่ 21 การดำเนิน ${pName} จึงมีความสำคัญอย่างยิ่งต่อการพัฒนาคุณภาพการเรียนการสอนและการบริหารจัดการสถานศึกษา\n\nการดำเนินงานมุ่งเน้นการมีส่วนร่วมของบุคลากรทางการศึกษา ผู้เรียน และชุมชน ${focus}เพื่อให้บรรลุผลสัมฤทธิ์ตามเป้าหมายของแผนปฏิบัติการประจำปีอย่างมีประสิทธิภาพและคุ้มค่าสูงสุด`,
+        rationale: fallbackRationale(pName, school.name, target, strat, specialFocus),
         objectives: [
           `เพื่อส่งเสริมและพัฒนาการดำเนินงาน ${pName} ให้บรรลุตามเป้าหมายมาตรฐานการศึกษา`,
           `เพื่อเปิดโอกาสให้กลุ่มเป้าหมาย (${target}) ได้รับการพัฒนาทักษะและความรู้อย่างเต็มศักยภาพ`,
@@ -334,10 +368,10 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
         timeline: dur,
         location: 'สถานศึกษาและแหล่งเรียนรู้ที่เกี่ยวข้อง',
         activities: [
-          { phase: 'ขั้นวางแผน (Plan)', description: 'แต่งตั้งคณะทำงาน ประชุมวางแผนกำหนดกรอบงาน และจัดทำเครื่องมือวัดผล', duration: 'เดือนที่ 1', responsible: pProposer },
-          { phase: 'ขั้นปฏิบัติการ (Do)', description: 'ดำเนินกิจกรรมตามโครงการ อบรมเชิงปฏิบัติการ และส่งเสริมการเรียนรู้', duration: 'เดือนที่ 2-6', responsible: 'คณะทำงานโครงการ' },
-          { phase: 'ขั้นตรวจสอบ (Check)', description: 'นิเทศ ติดตามผล ประเมินความพึงพอใจ และทดสอบสมรรถนะตามตัวชี้วัด', duration: 'เดือนที่ 7-8', responsible: pEndorser },
-          { phase: 'ขั้นปรับปรุงและรายงาน (Action)', description: 'สรุปผลการดำเนินงาน จัดทำรูปเล่มรายงาน และนำข้อเสนอแนะไปพัฒนาในรอบปีถัดไป', duration: 'เดือนที่ 9-10', responsible: pProposer },
+          { phase: 'ขั้นวางแผน (Plan)', description: 'แต่งตั้งคณะทำงาน ประชุมวางแผนกำหนดกรอบงาน และจัดทำเครื่องมือวัดผล', duration: fiscalMonthRange(fiscalYear.year, 1, 1), responsible: pProposer },
+          { phase: 'ขั้นปฏิบัติการ (Do)', description: `ดำเนินกิจกรรม ${pName} ตามแผนและกลุ่มเป้าหมาย`, duration: fiscalMonthRange(fiscalYear.year, 2, 8), responsible: 'คณะทำงานโครงการ' },
+          { phase: 'ขั้นตรวจสอบ (Check)', description: 'นิเทศ ติดตามผล และประเมินผลตามตัวชี้วัด', duration: fiscalMonthRange(fiscalYear.year, 9, 10), responsible: pEndorser },
+          { phase: 'ขั้นปรับปรุงและรายงาน (Action)', description: 'สรุปผลและนำข้อเสนอแนะไปปรับปรุง', duration: fiscalMonthRange(fiscalYear.year, 11, 12), responsible: pProposer },
         ],
         expenseItems: [
           { id: 1, projectId: 0, itemName: 'ค่าวัสดุ อุปกรณ์ และสื่อการดำเนินกิจกรรมโครงการ', category: 'ค่าวัสดุ', quantity: 1, unit: 'ชุด', unitPrice: bMat, totalAmount: bMat },
@@ -372,8 +406,10 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
           },
           body: JSON.stringify({
             projectName,
+            schoolName: school.name,
+            fiscalYear: fiscalYear.year,
             projectType,
-            department,
+            department: selectedDepartment,
             strategyName: strategyName || `ยุทธศาสตร์พัฒนาคุณภาพการศึกษา สพฐ. ปี ${fiscalYear.year}`,
             targetGroup,
             estimatedBudget,
@@ -402,48 +438,11 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
         console.warn('Backend AI route failed or offline, checking direct browser fallback...', backendErr);
       }
 
-      // 2. ถ้าเซิร์ฟเวอร์ยังไม่ตอบรับและมี Custom API Key ให้ลองเรียก Google Generative AI REST โดยตรงจากเบราว์เซอร์
-      if (!genData && customApiKey && customApiKey.trim().length > 10) {
-        try {
-          const cleanKey = customApiKey.trim();
-          const restUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(cleanKey)}`;
-          const sysPrompt = 'คุณคือผู้เชี่ยวชาญด้านการวางแผนการศึกษาและผู้ช่วยเขียนโครงการตามระเบียบของสำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.) ร่างข้อเสนอโครงการทางการศึกษาฉบับสมบูรณ์ ส่งออกเป็น JSON Object เท่านั้น โดยต้องมีฟิลด์: projectCode, projectName, projectType, department, strategyAlignment, responsiblePerson, position, proposerName, proposerPosition, endorserName, endorserPosition, approverName, approverPosition, rationale, objectives (array), quantitativeTarget, qualitativeTarget, timeline, location, activities (array of {phase, description, duration, responsible}), expenseItems (array of {id, itemName, category, quantity, unit, unitPrice, totalAmount}), totalBudget (number), budgetSource, kpis, evaluationMethods, expectedBenefits (array), proposedBy, acknowledgedBy';
-          
-          const userText = `กรุณาร่างโครงการ: ${projectName}, ฝ่าย: ${department}, งบประมาณ: ${estimatedBudget} บาท, กลุ่มเป้าหมาย: ${targetGroup}, ระยะเวลา: ${duration}, ประเด็นเน้นย้ำ: ${specialFocus}`;
-          
-          const restRes = await fetch(restUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ role: 'user', parts: [{ text: userText }] }],
-              systemInstruction: { parts: [{ text: sysPrompt }] },
-              generationConfig: { responseMimeType: 'application/json', temperature: 0.3 }
-            })
-          });
-
-          if (restRes.ok) {
-            const rawJson = await restRes.json();
-            const textPart = rawJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (textPart) {
-              const cleanPart = textPart.replace(/```(?:json)?/gi, '').trim();
-              const parsed = JSON.parse(cleanPart);
-              if (parsed && parsed.projectName) {
-                genData = parsed;
-                sourceName = 'gemini_ai';
-                sourceMessage = 'สร้างข้อเสนอโครงการด้วย Gemini 2.5 Flash สำเร็จ';
-              }
-            }
-          }
-        } catch (clientGeminiErr) {
-          console.warn('Direct client-side Gemini call encountered an issue:', clientGeminiErr);
-        }
-      }
-
-      // 3. หากระบบภายนอกทั้งหมดไม่ตอบสนอง ให้สร้างร่างโครงการฉบับสมบูรณ์ด้วยแบบฟอร์มมาตรฐาน สพฐ. ทันที
+      // หากเซิร์ฟเวอร์ไม่ตอบสนอง ให้ใช้แม่แบบและแจ้งชัดเจนว่าไม่ได้เรียก Gemini
       if (!genData) {
         genData = generateClientFallbackProposal();
         sourceName = 'template_fallback';
-        sourceMessage = 'สร้างโครงร่างโครงการตามมาตรฐานแบบฟอร์ม สพฐ. เรียบร้อย';
+        sourceMessage = 'ติดต่อเซิร์ฟเวอร์ AI ไม่สำเร็จ — ใช้แม่แบบแทน';
       }
 
       // Synchronize selected/entered signatories into proposal
@@ -463,7 +462,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
       genData.approverName = aName;
       genData.approverPosition = aPos;
 
-      setProposal(genData);
+      setProposal(normalizeProjectProposal(genData, school.name, fiscalYear.year, targetGroup));
       setGenerationSource(sourceName);
       if (sourceMessage) {
         setGenerationMessage(sourceMessage);
@@ -604,15 +603,15 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
   };
 
   // Print / PDF preview
-  const handlePrintPdf = () => {
+  const handlePrintPdf = async () => {
     setActiveTab('preview');
-    setTimeout(() => {
-      window.print();
-    }, 150);
+    await document.fonts.ready;
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    window.print();
   };
 
   // Save to active projects list in the app
-  const handleSaveToSchoolActionPlan = () => {
+  const handleSaveToSchoolActionPlan = async () => {
     if (!proposal) return;
     if (fiscalYear.isProposalOpen === false) {
       alert(`ไม่สามารถบันทึกโครงการเข้าแผนงานได้ เนื่องจากระบบปิดรับการเสนอโครงการประจำปีงบประมาณ พ.ศ. ${fiscalYear.year}`);
@@ -628,7 +627,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
     const finalTeacherName = proposerName.trim() || proposal.responsiblePerson || 'ครูผู้รับผิดชอบโครงการ';
 
     const newProject: Project = {
-      id: Date.now(),
+      id: 0, // App assigns a MySQL INT UNSIGNED compatible identifier.
       schoolId: school.id,
       fiscalYearId: fiscalYear.id,
       projectCode: proposal.projectCode || `กค.${Math.floor(Math.random() * 90 + 10)}/${fiscalYear.year}`,
@@ -644,6 +643,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
       location: proposal.location || school.name || 'โรงเรียนเด็กเรียนดี',
       targetGroup: proposal.quantitativeTarget,
       responsiblePerson: finalTeacherName,
+      responsibleId: currentUser?.id && finalTeacherName.trim() === currentUser.fullName.trim() ? currentUser.id : undefined,
       proposerName: finalTeacherName,
       proposerCitizenId: cleanCitizenId || undefined,
       attachmentName: attachmentName.trim() || undefined,
@@ -656,7 +656,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
         approverName: approverName || proposal.approverName || school.directorName || 'ผู้อำนวยการโรงเรียน',
         approverPosition: approverPosition || proposal.approverPosition || `ผู้อำนวยการโรงเรียน${school.name}`,
       },
-      department: proposal.department || 'ฝ่ายวิชาการ',
+      department: selectedDepartment,
       budgetSource: proposal.budgetSource || 'เงินอุดหนุนรายหัว สพฐ.',
       allocatedBudget: proposal.totalBudget,
       spentBudget: 0,
@@ -673,11 +673,17 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
       approvedDate: undefined,
     };
 
-    onSaveToProjects(newProject);
-    setSavedSuccess(true);
+    setSaveBusy(true);
+    setSaveMessage('');
+    try {
+      if (await onSaveToProjects(newProject)) setSavedSuccess(true);
+      else setSaveMessage('บันทึกหรืออ่านโครงการกลับจาก MySQL ไม่สำเร็จ กรุณาลองใหม่');
+    } catch {
+      setSaveMessage('ไม่สามารถบันทึกโครงการลง MySQL ได้ กรุณาลองใหม่');
+    } finally { setSaveBusy(false); }
   };
 
-  const isConnected = Boolean(customApiKey || hasSystemKey);
+  const isConnected = keyTestSuccess;
 
   return (
     <div className="space-y-6">
@@ -690,14 +696,14 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
             </div>
             <div>
               <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                <span>ระบบผู้ช่วยเขียนโครงการด้วย AI (AI Project Proposal Generator)</span>
+                <span>เขียนโครงการด้วย AI</span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2.5 py-0.5 text-xs font-semibold text-purple-800">
                   <Sparkles className="h-3 w-3" />
                   <span>Gemini 3.8 Flash</span>
                 </span>
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                ช่วยร่างและจัดทำแบบเสนอโครงการฉบับสมบูรณ์ตามระเบียบ สพฐ. แจกแจง 4 หมวดงบประมาณ พร้อมดาวน์โหลดเป็นเอกสาร Word (.doc) และ PDF
+                กรอกข้อมูล → ให้ AI ช่วยร่าง → ตรวจและแก้ไข → บันทึกเพื่อส่งตัดแผนงบประมาณ
               </p>
             </div>
           </div>
@@ -719,9 +725,9 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
             <Key className="h-3.5 w-3.5" />
             <span>
               {customApiKey
-                ? 'ใช้ Custom API Key'
+                ? 'พบคีย์ส่วนตัว (กดทดสอบ)'
                 : hasSystemKey
-                ? 'เชื่อมต่อ System API Key'
+                ? 'พบคีย์เซิร์ฟเวอร์ (กดทดสอบ)'
                 : 'ระบุ Gemini API Key'}
             </span>
             <span
@@ -732,6 +738,8 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
           </button>
         </div>
       </div>
+
+      <ProjectWorkflow active={1} />
 
       {/* Proposal Window Banner */}
       {fiscalYear.isProposalOpen === false ? (
@@ -773,8 +781,8 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
       )}
 
       {/* Navigation Sub-Tabs */}
-      <div className="flex items-center justify-between border-b border-slate-200 no-print">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-xs no-print xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={() => setActiveTab('form')}
@@ -785,7 +793,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
             }`}
           >
             <Sliders className="h-4 w-4" />
-            <span>1. กำหนดข้อมูลโครงการ & AI Prompt</span>
+            <span>1. กำหนดข้อมูล</span>
           </button>
 
           <button
@@ -807,7 +815,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
             }`}
           >
             <FileText className="h-4 w-4" />
-            <span>2. ตัวอย่างแบบเสนอโครงการ (Official Preview)</span>
+            <span>2. ตรวจแบบเสนอ</span>
             {proposal && (
               <span className="h-2 w-2 rounded-full bg-blue-600" />
             )}
@@ -832,13 +840,13 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
             }`}
           >
             <Edit3 className="h-4 w-4" />
-            <span>3. แก้ไขเนื้อหา & งบประมาณ (Interactive Editor)</span>
+            <span>3. แก้ไขร่าง</span>
           </button>
         </div>
 
         {/* Action buttons when proposal is available */}
         {proposal && (
-          <div className="flex items-center gap-2 pb-2">
+          <div className="flex flex-wrap items-center gap-2">
             {savedSuccess ? (
               <span className="flex items-center gap-1 text-xs text-emerald-700 font-semibold bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
                 <Check className="h-3.5 w-3.5" />
@@ -848,14 +856,16 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
               <button
                 id="btn-save-to-school-plan"
                 type="button"
-                onClick={handleSaveToSchoolActionPlan}
+                onClick={() => void handleSaveToSchoolActionPlan()}
+                disabled={saveBusy}
                 className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white shadow-xs transition-colors"
                 title="นำโครงการนี้ไปบันทึกเป็นโครงการจริงในแผนปฏิบัติการของโรงเรียน"
               >
                 <Save className="h-3.5 w-3.5" />
-                <span>บันทึกเข้าแผนงานโรงเรียน</span>
+                <span>{saveBusy ? 'กำลังตรวจสอบ MySQL...' : 'บันทึกเข้าแผนงานโรงเรียน'}</span>
               </button>
             )}
+            {saveMessage && <span role="alert" className="text-xs text-red-700">{saveMessage}</span>}
 
             <button
               id="btn-download-word-proposal"
@@ -899,7 +909,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
                   key={idx}
                   type="button"
                   onClick={() => handleSelectPreset(preset)}
-                  className="text-left bg-white hover:bg-blue-100/50 border border-slate-200 hover:border-blue-300 p-3 rounded-lg transition-all shadow-2xs group"
+                  className="min-w-0 text-left bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 p-4 rounded-xl transition-all shadow-xs group focus-visible:outline-2 focus-visible:outline-blue-600"
                 >
                   <div className="text-xs font-bold text-slate-800 group-hover:text-blue-700 line-clamp-2">
                     {preset.title}
@@ -945,14 +955,11 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
                   ฝ่ายบริหารที่รับผิดชอบ
                 </label>
                 <select
-                  value={department}
+                  value={selectedDepartment}
                   onChange={(e) => setDepartment(e.target.value)}
                   className="w-full text-xs font-semibold rounded-lg border border-slate-300 bg-white py-2 px-3 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 >
-                  <option value="ฝ่ายวิชาการ">ฝ่ายวิชาการ (กลุ่มบริหารงานวิชาการ)</option>
-                  <option value="ฝ่ายงบประมาณ">ฝ่ายงบประมาณ (กลุ่มบริหารงานงบประมาณ)</option>
-                  <option value="ฝ่ายบุคคล">ฝ่ายบุคคล (กลุ่มบริหารงานบุคคล)</option>
-                  <option value="ฝ่ายบริหารทั่วไป">ฝ่ายบริหารทั่วไป (กลุ่มบริหารงานทั่วไป)</option>
+                  {projectDepartments.map(a => <option key={a.id} value={a.departmentName}>{a.departmentName}</option>)}
                 </select>
               </div>
 
@@ -1324,8 +1331,8 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
                 <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                 <span>
                   {generationSource === 'gemini_ai'
-                    ? 'สร้างโดย Gemini 3.8 Flash AI สำเร็จ สมบูรณ์ตามรูปแบบระเบียบราชการ สพฐ.'
-                    : 'สร้างตามโครงสร้างมาตรฐานแบบฟอร์ม สพฐ. (Template Base)'}
+                    ? 'ร่างด้วย Gemini AI — กรุณาตรวจเนื้อหาและข้อมูลจริงก่อนพิมพ์'
+                    : 'ร่างด้วยแม่แบบ — กรุณาตรวจเนื้อหาและข้อมูลจริงก่อนพิมพ์'}
                 </span>
                 {generationMessage && (
                   <span className="text-slate-500">({generationMessage})</span>
@@ -1347,12 +1354,12 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
           {/* Official Document Sheet (A4 Styled) */}
           <div
             id="official-project-proposal-sheet"
-            className="bg-white rounded-xl border border-slate-300 shadow-md p-8 md:p-12 text-slate-900 max-w-4xl mx-auto printable-proposal font-sans leading-relaxed"
+            className="bg-white rounded-xl border border-slate-300 shadow-md p-6 md:p-8 text-slate-900 max-w-[180mm] mx-auto printable-proposal font-sarabun leading-relaxed"
           >
             {/* Header / Official Project Title */}
             <div className="text-center border-b-2 border-slate-900 pb-4 mb-6">
               <div className="text-lg md:text-xl font-bold text-slate-950">
-                โครงการ{proposal.projectName}
+                {proposal.projectName.startsWith('โครงการ') ? proposal.projectName : `โครงการ${proposal.projectName}`}
               </div>
               <div className="text-sm md:text-base font-semibold text-slate-800 mt-1">
                 ตามแผนปฏิบัติการประจำปีงบประมาณ พ.ศ. {fiscalYear.year}
@@ -1361,7 +1368,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
                 {school.name}
               </div>
               <div className="text-xs text-slate-600">
-                สำนักงานเขตพื้นที่การศึกษา{school.educationArea || school.affiliation}
+                {school.educationArea?.startsWith('สำนักงาน') ? school.educationArea : `สำนักงานเขตพื้นที่การศึกษา${school.educationArea || school.affiliation || ''}`}
               </div>
             </div>
 
@@ -1373,21 +1380,17 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
                 <span className="font-semibold text-blue-950">{proposal.projectName}</span>
               </div>
 
-              {/* 2. Code & Type */}
-              <div className="grid grid-cols-2 gap-4">
+              {/* 2. Type */}
+              <div>
                 <div>
-                  <span className="font-bold text-slate-950">2. รหัสโครงการ: </span>
-                  <span className="font-mono font-semibold">{proposal.projectCode}</span>
-                </div>
-                <div>
-                  <span className="font-bold text-slate-950">3. ลักษณะโครงการ: </span>
+                  <span className="font-bold text-slate-950">2. ลักษณะโครงการ: </span>
                   <span>โครงการ{proposal.projectType}</span>
                 </div>
               </div>
 
               {/* 4. Strategy */}
               <div>
-                <span className="font-bold text-slate-950">4. ความสอดคล้องกับยุทธศาสตร์ / นโยบาย:</span>
+                <span className="font-bold text-slate-950">3. ความสอดคล้องกับยุทธศาสตร์ / นโยบาย:</span>
                 <p className="mt-1 ml-4 text-slate-700">{proposal.strategyAlignment}</p>
               </div>
 
@@ -1400,26 +1403,21 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
                 <div>
                   <span className="font-bold text-slate-950">ผู้เสนอโครงการ: </span>
                   <span className="font-semibold text-blue-900">{proposerName || proposal.responsiblePerson}</span>
-                  {proposerCitizenId && (
-                    <span className="ml-2 text-xs font-mono bg-blue-100 text-blue-800 px-2 py-0.5 rounded border border-blue-200">
-                      เลขบัตร: {formatCitizenId(proposerCitizenId)}
-                    </span>
-                  )}
                   {proposal.position && <span className="text-slate-500"> ({proposal.position})</span>}
                 </div>
               </div>
 
               {/* 6. Rationale */}
               <div>
-                <div className="font-bold text-slate-950 mb-1">5. หลักการและเหตุผล:</div>
-                <p className="text-justify leading-relaxed indent-8 text-slate-800 bg-slate-50/50 p-3 rounded border border-slate-100">
+                <div className="font-bold text-slate-950 mb-1">4. หลักการและเหตุผล:</div>
+                <p className="whitespace-pre-line text-justify leading-relaxed indent-8 text-slate-800 bg-slate-50/50 p-3 rounded border border-slate-100">
                   {proposal.rationale}
                 </p>
               </div>
 
               {/* 7. Objectives */}
               <div>
-                <div className="font-bold text-slate-950 mb-1">6. วัตถุประสงค์:</div>
+                <div className="font-bold text-slate-950 mb-1">5. วัตถุประสงค์:</div>
                 <ul className="space-y-1 ml-6 list-decimal text-slate-800">
                   {proposal.objectives.map((obj, i) => (
                     <li key={i}>{obj}</li>
@@ -1429,14 +1427,14 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
 
               {/* 8. Targets */}
               <div>
-                <div className="font-bold text-slate-950 mb-1">7. เป้าหมาย:</div>
+                <div className="font-bold text-slate-950 mb-1">6. เป้าหมาย:</div>
                 <div className="ml-4 space-y-1 text-slate-800">
                   <div>
-                    <span className="font-semibold">7.1 เป้าหมายเชิงปริมาณ: </span>
+                    <span className="font-semibold">6.1 เป้าหมายเชิงปริมาณ: </span>
                     {proposal.quantitativeTarget}
                   </div>
                   <div>
-                    <span className="font-semibold">7.2 เป้าหมายเชิงคุณภาพ: </span>
+                    <span className="font-semibold">6.2 เป้าหมายเชิงคุณภาพ: </span>
                     {proposal.qualitativeTarget}
                   </div>
                 </div>
@@ -1445,7 +1443,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
               {/* 9. Location & Duration */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <div>
-                  <span className="font-bold text-slate-950">8. สถานที่ดำเนินการ: </span>
+                  <span className="font-bold text-slate-950">7. สถานที่ดำเนินการ: </span>
                   <span>{proposal.location}</span>
                 </div>
                 <div>
@@ -1456,9 +1454,9 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
 
               {/* 10. PDCA Activities Table */}
               <div>
-                <div className="font-bold text-slate-950 mb-2">9. ขั้นตอนและปฏิทินการดำเนินงาน (PDCA):</div>
+                <div className="font-bold text-slate-950 mb-2">8. ขั้นตอนและปฏิทินการดำเนินงาน (PDCA):</div>
                 <div className="overflow-x-auto">
-                  <table className="w-full border-collapse border border-slate-300 text-xs">
+                  <table id="proposal-activity-table" className="w-full border-collapse border border-slate-300 text-xs">
                     <thead>
                       <tr className="bg-slate-100 text-slate-800">
                         <th className="border border-slate-300 py-2 px-2.5 w-1/4 text-left">ขั้นตอนการดำเนินงาน</th>
@@ -1492,13 +1490,13 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
               {/* 11. Budget & Itemized Table */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <div className="font-bold text-slate-950">10. งบประมาณและรายละเอียดค่าใช้จ่าย:</div>
+                  <div className="font-bold text-slate-950">9. งบประมาณและรายละเอียดค่าใช้จ่าย:</div>
                   <div className="text-xs text-slate-600">
                     แหล่งงบประมาณ: <span className="font-semibold text-blue-900">{proposal.budgetSource}</span>
                   </div>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full border-collapse border border-slate-300 text-xs">
+                  <table id="proposal-expense-table" className="w-full border-collapse border border-slate-300 text-xs">
                     <thead>
                       <tr className="bg-slate-100 text-slate-800">
                         <th className="border border-slate-300 py-2 px-1.5 w-10 text-center">ที่</th>
@@ -1551,7 +1549,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
 
               {/* 12. KPIs & Evaluation */}
               <div>
-                <div className="font-bold text-slate-950 mb-1">11. การประเมินผลและตัวชี้วัดความสำเร็จ:</div>
+                <div className="font-bold text-slate-950 mb-1">10. การประเมินผลและตัวชี้วัดความสำเร็จ:</div>
                 <div className="ml-4 space-y-1 text-slate-800">
                   <div>
                     <span className="font-semibold">ตัวชี้วัด (KPI): </span>
@@ -1566,7 +1564,7 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
 
               {/* 13. Expected Benefits */}
               <div>
-                <div className="font-bold text-slate-950 mb-1">12. ประโยชน์ที่คาดว่าจะได้รับ:</div>
+                <div className="font-bold text-slate-950 mb-1">11. ประโยชน์ที่คาดว่าจะได้รับ:</div>
                 <ul className="space-y-1 ml-6 list-decimal text-slate-800">
                   {proposal.expectedBenefits.map((b, i) => (
                     <li key={i}>{b}</li>
@@ -1579,22 +1577,19 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
                 <div className="grid grid-cols-2 gap-8 text-center">
                   {/* Left Column: Proposer */}
                   <div className="space-y-1.5">
-                    <p className="font-medium">ลงชื่อ.......................................................... ผู้เสนอโครงการ</p>
+                    <p className="font-bold text-slate-900 mb-2">ผู้เสนอโครงการ</p>
+                    <p className="font-medium pt-3">ลงชื่อ..........................................................</p>
                     <p className="font-bold text-slate-950">
                       ({proposal.proposerName || proposerName || proposal.responsiblePerson || 'ครูผู้เสนอโครงการ'})
                     </p>
-                    {proposerCitizenId ? (
-                      <p className="text-slate-600 font-mono text-xs">เลขประจำตัวประชาชน: {formatCitizenId(proposerCitizenId)}</p>
-                    ) : (
-                      <p className="text-slate-500 text-xs">เลขประจำตัวประชาชน: ........................................</p>
-                    )}
                     <p className="text-slate-700">ตำแหน่ง {proposal.proposerPosition || proposerPosition || proposal.position || 'ครูผู้รับผิดชอบโครงการ'}</p>
                     <p className="text-slate-500 text-xs">วันที่ ..... เดือน .................... พ.ศ. .........</p>
                   </div>
 
                   {/* Right Column: Endorser */}
                   <div className="space-y-1.5">
-                    <p className="font-medium">ลงชื่อ.......................................................... ผู้เห็นชอบโครงการ</p>
+                    <p className="font-bold text-slate-900 mb-2">ผู้เห็นชอบโครงการ</p>
+                    <p className="font-medium pt-3">ลงชื่อ..........................................................</p>
                     <p className="font-bold text-slate-950">
                       ({proposal.endorserName || endorserName || 'ผู้เห็นชอบโครงการ'})
                     </p>
@@ -1655,26 +1650,12 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
               />
             </div>
 
-            {/* Code */}
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">รหัสโครงการ</label>
-              <input
-                type="text"
-                value={proposal.projectCode}
-                onChange={(e) => handleUpdateField('projectCode', e.target.value)}
-                className="w-full rounded border border-slate-300 py-2 px-3 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
-
             {/* Department */}
             <div>
               <label className="block font-bold text-slate-700 mb-1">ฝ่ายบริหาร</label>
-              <input
-                type="text"
-                value={proposal.department}
-                onChange={(e) => handleUpdateField('department', e.target.value)}
-                className="w-full rounded border border-slate-300 py-2 px-3 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
+              <select value={selectedDepartment} onChange={(e) => { setDepartment(e.target.value); handleUpdateField('department', e.target.value); }} className="w-full rounded border border-slate-300 py-2 px-3">
+                {projectDepartments.map(a => <option key={a.id} value={a.departmentName}>{a.departmentName}</option>)}
+              </select>
             </div>
 
             {/* Responsible Person */}
@@ -2188,14 +2169,14 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
                   <span>
                     สถานะ System API Key (Server):{' '}
                     {hasSystemKey ? (
-                      <span className="text-emerald-700 font-bold">พร้อมใช้งาน</span>
+                      <span className="text-emerald-700 font-bold">พบคีย์ในเซิร์ฟเวอร์ (กดทดสอบเพื่อยืนยัน)</span>
                     ) : (
-                      <span className="text-amber-700 font-bold">ยังไม่ได้ตั้งค่าใน Secrets</span>
+                      <span className="text-amber-700 font-bold">ไม่พบคีย์ใน .env ของเซิร์ฟเวอร์{customApiKey ? ' — มีคีย์ส่วนตัวในเบราว์เซอร์' : ''}</span>
                     )}
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-500">
-                  ระบบเชื่อมต่อโมเดล Gemini 2.5 Flash / 1.5 Flash ในการวิเคราะห์โครงสร้างโครงการและเขียนภาษาราชการตามระเบียบ สพฐ.
+                  ระบบใช้ Gemini 3.8 Flash ผ่านเซิร์ฟเวอร์เพื่อร่างโครงการ กดปุ่มทดสอบเพื่อยืนยันว่าเรียกโมเดลได้จริง
                 </p>
               </div>
 
@@ -2206,19 +2187,19 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
                 <input
                   type="password"
                   value={customApiKey}
-                  onChange={(e) => setCustomApiKey(e.target.value)}
+                  onChange={(e) => { setCustomApiKey(e.target.value); setKeyTestSuccess(false); setKeyTest(null); }}
                   placeholder="วาง API Key ที่นี่ (เช่น AIza... หรือคีย์รูปแบบใหม่อื่นๆ)"
                   className="w-full text-xs font-mono rounded-lg border border-slate-300 py-2 px-3 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
                 <p className="text-[11px] text-slate-400 mt-1">
-                  รองรับคีย์ API ทุกรูปแบบจาก Google AI Studio ระบบจะบันทึกไว้ในเบราว์เซอร์ของท่านอย่างปลอดภัย
+                  รองรับคีย์ API ทุกรูปแบบจาก Google AI Studio คีย์ส่วนตัวจะถูกเก็บในเบราว์เซอร์เครื่องนี้ ควรใช้เครื่องส่วนตัว หรือกำหนด GEMINI_API_KEY ใน .env บนเซิร์ฟเวอร์แทน
                 </p>
               </div>
 
               <div className="bg-blue-50/70 p-3 rounded-lg border border-blue-200">
-                <div className="font-semibold text-blue-900 mb-0.5">วิธีขอรับ Gemini API Key ฟรี:</div>
+                <div className="font-semibold text-blue-900 mb-0.5">วิธีขอรับ Gemini API Key:</div>
                 <p className="text-[11px] text-blue-800">
-                  ท่านสามารถเข้าสู่ระบบ Google AI Studio เพื่อสร้าง API Key ได้ฟรี โดยไม่มีค่าใช้จ่าย
+                  ท่านสามารถสร้าง API Key ใน Google AI Studio โปรดตรวจสอบโควตาและค่าใช้จ่ายของบัญชี Google ที่ใช้
                 </p>
                 <a
                   href="https://aistudio.google.com/app/apikey"
@@ -2233,6 +2214,8 @@ export const AiProjectWriterView: React.FC<AiProjectWriterViewProps> = ({
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              {keyTest && <span role="status" className={`mr-auto max-w-xs text-xs font-semibold ${keyTestSuccess ? 'text-emerald-700' : 'text-rose-700'}`}>{keyTest}</span>}
+              <button type="button" onClick={testApiKey} disabled={testingKey} className="rounded-lg border border-blue-300 px-3 py-2 text-xs font-semibold text-blue-800 disabled:opacity-50">{testingKey ? 'กำลังทดสอบ...' : 'ทดสอบการเชื่อมต่อจริง'}</button>
               <button
                 type="button"
                 onClick={() => {

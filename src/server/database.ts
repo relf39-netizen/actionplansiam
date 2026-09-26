@@ -173,7 +173,7 @@ export async function getDirectConnection(params?: Partial<DatabaseConfig>) {
         user: cfg.user,
         password: cfg.pass || '',
         database: cfg.dbname,
-        connectTimeout: 5000,
+        connectTimeout: 1200,
         charset: 'utf8mb4',
         multipleStatements: true,
       });
@@ -344,46 +344,14 @@ export async function runDatabaseMigration(): Promise<{
       const sqlContent = fs.readFileSync(SCHEMA_FILE, 'utf-8');
       logs.push(`✓ อ่านไฟล์ Schema จาก database/schema.sql (${Buffer.byteLength(sqlContent)} bytes)`);
 
-      // ตัดแบ่งคำสั่งตาม semicolon
-      const statements = sqlContent
-        .split(/;\s*$/m)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0 && !s.startsWith('--') && !s.startsWith('/*'));
-
-      let executedCount = 0;
-      let skippedDropCount = 0;
-
-      for (let stmt of statements) {
-        // ป้องกันข้อมูลสูญหาย: ข้ามคำสั่ง DROP TABLE, DROP DATABASE, TRUNCATE ทั้งหมดเด็ดขาด
-        const cleanUpper = stmt.trim().toUpperCase();
-        if (cleanUpper.startsWith('DROP TABLE') || cleanUpper.startsWith('DROP DATABASE') || cleanUpper.startsWith('TRUNCATE')) {
-          skippedDropCount++;
-          continue;
-        }
-
-        // หากเป็น CREATE TABLE ให้เปลี่ยนเป็น CREATE TABLE IF NOT EXISTS เสมอ
-        if (/^CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)/i.test(stmt)) {
-          stmt = stmt.replace(/^CREATE\s+TABLE\s+/i, 'CREATE TABLE IF NOT EXISTS ');
-        }
-
-        // สำหรับ INSERT เริ่มต้น เช่น super_admins ให้ใช้ INSERT IGNORE เพื่อไม่ให้ทับข้อมูลเดิม
-        if (/^INSERT\s+INTO\s+/i.test(stmt) && !/^INSERT\s+IGNORE\s+INTO\s+/i.test(stmt)) {
-          stmt = stmt.replace(/^INSERT\s+INTO\s+/i, 'INSERT IGNORE INTO ');
-        }
-
-        if (stmt.length > 5) {
-          try {
-            await conn.query(stmt);
-            executedCount++;
-          } catch (e: any) {
-            console.warn('Migration warning:', e.message);
-          }
-        }
+      // The import schema contains DROP TABLE statements. Never execute them on live data.
+      const createStatements = sqlContent.split(';').map(part =>
+        part.replace(/^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*/g, '').trim()
+      ).filter(part => /^CREATE TABLE\s+/i.test(part));
+      for (const statement of createStatements) {
+        await conn.query(statement.replace(/^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?/i, 'CREATE TABLE IF NOT EXISTS '));
       }
-      if (skippedDropCount > 0) {
-        logs.push(`🛡️ ข้ามคำสั่ง DROP TABLE ทั้งหมด ${skippedDropCount} คำสั่ง เพื่อรักษาข้อมูลเดิม`);
-      }
-      logs.push(`✓ ติดตั้งและตรวจสอบตารางฐานข้อมูลครบถ้วน (${executedCount} statements) โดยรักษาข้อมูลเดิมไว้ 100%`);
+      logs.push(`✓ ตรวจสอบตาราง ${createStatements.length} ตาราง โดยรักษาข้อมูลเดิมไว้`);
     } else {
       logs.push('⚠️ ไม่พบไฟล์ schema.sql กำลังสร้างตารางหลักอัตโนมัติ...');
     }
@@ -410,15 +378,6 @@ export async function runDatabaseMigration(): Promise<{
  * บันทึก App Data ลง MySQL จริงแบบครอบคลุมทุกตาราง พร้อมจำกัดสิทธิ์ school_id
  */
 export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ success: boolean; message: string; error?: string }> {
-  // บันทึกลง Disk File เป็น Backup สำรองเสมอ ข้อมูลจะไม่สูญหายแม้ MySQL ออฟไลน์
-  try {
-    const dir = path.dirname(APP_DB_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(APP_DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Error saving local disk backup:', e);
-  }
-
   try {
     const conn = await getDirectConnection();
 
@@ -431,21 +390,12 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       \`school_key\` VARCHAR(50) NOT NULL,
       \`admin_username\` VARCHAR(50) NOT NULL DEFAULT 'admin',
       \`admin_password_plain\` VARCHAR(100) DEFAULT '123456',
-      \`admin_teacher_id\` INT UNSIGNED DEFAULT NULL,
-      \`admin_teacher_name\` VARCHAR(150) DEFAULT NULL,
       \`name\` VARCHAR(255) NOT NULL,
-      \`address\` VARCHAR(255) DEFAULT NULL,
-      \`subdistrict\` VARCHAR(100) DEFAULT NULL,
-      \`district\` VARCHAR(100) DEFAULT NULL,
       \`province\` VARCHAR(100) DEFAULT NULL,
-      \`zipcode\` VARCHAR(20) DEFAULT NULL,
-      \`affiliation\` VARCHAR(255) DEFAULT 'สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.)',
       \`education_area\` VARCHAR(255) DEFAULT NULL,
-      \`fiscal_year\` INT UNSIGNED DEFAULT 2568,
       \`director_name\` VARCHAR(150) DEFAULT NULL,
       \`phone\` VARCHAR(50) DEFAULT NULL,
       \`email\` VARCHAR(100) DEFAULT NULL,
-      \`logo_url\` LONGTEXT DEFAULT NULL,
       \`student_count\` INT UNSIGNED DEFAULT 0,
       \`project_count\` INT UNSIGNED DEFAULT 0,
       \`total_budget\` DECIMAL(15,2) DEFAULT 0,
@@ -460,41 +410,26 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
     try {
       const [colRows]: any = await conn.query('SHOW COLUMNS FROM `schools`');
       const existingCols = (colRows || []).map((c: any) => c.Field);
-      if (!existingCols.includes('logo_url')) {
-        await conn.query('ALTER TABLE `schools` ADD COLUMN `logo_url` LONGTEXT DEFAULT NULL AFTER `email`');
-      }
-      if (!existingCols.includes('address')) {
-        await conn.query('ALTER TABLE `schools` ADD COLUMN `address` VARCHAR(255) DEFAULT NULL AFTER `name`');
-      }
-      if (!existingCols.includes('subdistrict')) {
-        await conn.query('ALTER TABLE `schools` ADD COLUMN `subdistrict` VARCHAR(100) DEFAULT NULL AFTER `address`');
-      }
-      if (!existingCols.includes('district')) {
-        await conn.query('ALTER TABLE `schools` ADD COLUMN `district` VARCHAR(100) DEFAULT NULL AFTER `subdistrict`');
-      }
-      if (!existingCols.includes('zipcode')) {
-        await conn.query('ALTER TABLE `schools` ADD COLUMN `zipcode` VARCHAR(20) DEFAULT NULL AFTER `province`');
-      }
-      if (!existingCols.includes('affiliation')) {
-        await conn.query('ALTER TABLE `schools` ADD COLUMN `affiliation` VARCHAR(255) DEFAULT "สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.)" AFTER `zipcode`');
-      }
-      if (!existingCols.includes('fiscal_year')) {
-        await conn.query('ALTER TABLE `schools` ADD COLUMN `fiscal_year` INT UNSIGNED DEFAULT 2568 AFTER `education_area`');
-      }
-      if (!existingCols.includes('admin_teacher_id')) {
-        await conn.query('ALTER TABLE `schools` ADD COLUMN `admin_teacher_id` INT UNSIGNED DEFAULT NULL AFTER `admin_password_plain`');
-      }
-      if (!existingCols.includes('admin_teacher_name')) {
-        await conn.query('ALTER TABLE `schools` ADD COLUMN `admin_teacher_name` VARCHAR(150) DEFAULT NULL AFTER `admin_teacher_id`');
-      }
       if (!existingCols.includes('student_count')) {
-        await conn.query('ALTER TABLE `schools` ADD COLUMN `student_count` INT UNSIGNED DEFAULT 0 AFTER `logo_url`');
+        await conn.query('ALTER TABLE `schools` ADD COLUMN `student_count` INT UNSIGNED DEFAULT 0 AFTER `email`');
       }
       if (!existingCols.includes('project_count')) {
         await conn.query('ALTER TABLE `schools` ADD COLUMN `project_count` INT UNSIGNED DEFAULT 0 AFTER `student_count`');
       }
       if (!existingCols.includes('total_budget')) {
         await conn.query('ALTER TABLE `schools` ADD COLUMN `total_budget` DECIMAL(15,2) DEFAULT 0 AFTER `project_count`');
+      }
+      const schoolFields: Record<string, string> = {
+        address: 'VARCHAR(255)', subdistrict: 'VARCHAR(100)', district: 'VARCHAR(100)',
+        zipcode: 'VARCHAR(10)', affiliation: 'VARCHAR(255)', fiscal_year: 'INT UNSIGNED',
+        logo_url: 'LONGTEXT',
+      };
+      for (const [column, type] of Object.entries(schoolFields)) {
+        if (!existingCols.includes(column)) await conn.query(`ALTER TABLE schools ADD COLUMN \`${column}\` ${type} NULL`);
+      }
+      const logoColumn = (colRows || []).find((c: any) => c.Field === 'logo_url');
+      if (logoColumn && /^text$/i.test(logoColumn.Type)) {
+        await conn.query('ALTER TABLE schools MODIFY COLUMN logo_url LONGTEXT NULL');
       }
     } catch (e) {}
 
@@ -554,16 +489,12 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       \`school_id\` INT UNSIGNED NOT NULL,
       \`fiscal_year_id\` INT UNSIGNED NOT NULL DEFAULT 1,
       \`grade_level\` VARCHAR(100) NOT NULL,
-      \`stage\` VARCHAR(50) NOT NULL DEFAULT 'ประถม',
+      \`stage\` VARCHAR(50) NOT NULL,
       \`male_count\` INT UNSIGNED NOT NULL DEFAULT 0,
       \`female_count\` INT UNSIGNED NOT NULL DEFAULT 0,
       \`total_count\` INT UNSIGNED NOT NULL DEFAULT 0,
       PRIMARY KEY (\`id\`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
-
-    try {
-      await conn.query('ALTER TABLE `students` MODIFY COLUMN `stage` VARCHAR(50) NOT NULL DEFAULT "ประถม"');
-    } catch (e) {}
 
     await conn.query(`CREATE TABLE IF NOT EXISTS \`revenues\` (
       \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -578,6 +509,10 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       \`note\` TEXT DEFAULT NULL,
       PRIMARY KEY (\`id\`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+    const [revenueColumns]: any = await conn.query("SHOW COLUMNS FROM revenues LIKE 'category'");
+    if (String(revenueColumns?.[0]?.Type || '').toLowerCase().startsWith('enum(')) {
+      await conn.query("ALTER TABLE revenues MODIFY COLUMN category VARCHAR(50) NOT NULL DEFAULT 'subsidy'");
+    }
 
     await conn.query(`CREATE TABLE IF NOT EXISTS \`budget_allocations\` (
       \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -592,6 +527,18 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       \`description\` TEXT DEFAULT NULL,
       PRIMARY KEY (\`id\`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+    const [allocationColumns]: any = await conn.query('SHOW COLUMNS FROM budget_allocations');
+    if (!allocationColumns.some((c: any) => c.Field === 'reserve_type')) {
+      await conn.query('ALTER TABLE budget_allocations ADD COLUMN reserve_type VARCHAR(20) NULL');
+    }
+    await conn.query(`CREATE TABLE IF NOT EXISTS budget_settings (
+      school_id INT UNSIGNED NOT NULL, fiscal_year_id INT UNSIGNED NOT NULL,
+      carryover DECIMAL(14,2) NOT NULL DEFAULT 0, manual_total DECIMAL(14,2) NULL,
+      learner_initialized TINYINT(1) NOT NULL DEFAULT 0,
+      PRIMARY KEY (school_id, fiscal_year_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+    const [settingColumns]: any = await conn.query('SHOW COLUMNS FROM budget_settings');
+    if (!settingColumns.some((c: any) => c.Field === 'learner_initialized')) await conn.query('ALTER TABLE budget_settings ADD COLUMN learner_initialized TINYINT(1) NOT NULL DEFAULT 0');
 
     await conn.query(`CREATE TABLE IF NOT EXISTS \`learner_activities\` (
       \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -603,8 +550,11 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       \`spent_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
       \`remaining_amount\` DECIMAL(14,2) NOT NULL DEFAULT 0.00,
       \`note\` TEXT DEFAULT NULL,
+      \`description\` TEXT DEFAULT NULL,
       PRIMARY KEY (\`id\`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
+    const [activityColumns]: any = await conn.query('SHOW COLUMNS FROM learner_activities');
+    if (!activityColumns.some((c: any) => c.Field === 'description')) await conn.query('ALTER TABLE learner_activities ADD COLUMN description TEXT NULL');
 
     await conn.query(`CREATE TABLE IF NOT EXISTS \`strategies\` (
       \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -669,79 +619,43 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       const cleanSmis = String(s.smisCode || s.schoolCode || '10000001').slice(0, 8);
       const cleanCode = s.schoolCode || (cleanSmis + '00');
       const sName = s.name || 'โรงเรียนของคุณ';
-      const address = s.address || '';
-      const subdistrict = s.subdistrict || '';
-      const district = s.district || '';
-      const province = s.province || '';
-      const zipcode = s.zipcode || '';
-      const affiliation = s.affiliation || 'สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.)';
-      const educationArea = s.educationArea || '';
-      const fiscalYear = Number(s.fiscalYear) || 2568;
-      const directorName = s.directorName || '';
-      const phone = s.phone || '';
-      const email = s.email || '';
-      const logoUrl = s.logoUrl || '';
-      const notes = s.notes || '';
-      const studentCount = Number(s.studentCount) || 0;
-      const projectCount = Number(s.projectCount) || 0;
-      const totalBudget = Number(s.totalBudget) || 0;
-      const adminTeacherId = s.adminTeacherId || null;
-      const adminTeacherName = s.adminTeacherName || null;
 
       if (s.id && s.id > 0) {
         await conn.query(
-          `INSERT INTO schools (id, school_code, smis_code, name, address, subdistrict, district, province, zipcode, affiliation, education_area, fiscal_year, director_name, phone, email, logo_url, student_count, project_count, total_budget, admin_teacher_id, admin_teacher_name, notes, is_active, school_key)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+          `INSERT INTO schools (id, school_code, smis_code, name, province, education_area, director_name, phone, email, is_active, school_key, address, subdistrict, district, zipcode, affiliation, fiscal_year, logo_url)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              name = VALUES(name),
-             address = VALUES(address),
-             subdistrict = VALUES(subdistrict),
-             district = VALUES(district),
+             school_code = VALUES(school_code),
              province = VALUES(province),
-             zipcode = VALUES(zipcode),
-             affiliation = VALUES(affiliation),
              education_area = VALUES(education_area),
-             fiscal_year = VALUES(fiscal_year),
              director_name = VALUES(director_name),
              phone = VALUES(phone),
              email = VALUES(email),
+             address = VALUES(address), subdistrict = VALUES(subdistrict), district = VALUES(district),
+             zipcode = VALUES(zipcode), affiliation = VALUES(affiliation), fiscal_year = VALUES(fiscal_year),
              logo_url = VALUES(logo_url),
-             student_count = VALUES(student_count),
-             project_count = VALUES(project_count),
-             total_budget = VALUES(total_budget),
-             admin_teacher_id = VALUES(admin_teacher_id),
-             admin_teacher_name = VALUES(admin_teacher_name),
-             notes = VALUES(notes),
              updated_at = CURRENT_TIMESTAMP`,
-          [s.id, cleanCode, cleanSmis, sName, address, subdistrict, district, province, zipcode, affiliation, educationArea, fiscalYear, directorName, phone, email, logoUrl, studentCount, projectCount, totalBudget, adminTeacherId, adminTeacherName, notes, `SCH-${cleanSmis}`]
+          [s.id, cleanCode, cleanSmis, sName, s.province || '', s.educationArea || '', s.directorName || '', s.phone || '', s.email || '', `SCH-${cleanSmis}`, s.address || '', s.subdistrict || '', s.district || '', s.zipcode || '', s.affiliation || '', Number(s.fiscalYear) || null, s.logoUrl || null]
         );
         schoolId = s.id;
       } else {
         const [insertRes]: any = await conn.query(
-          `INSERT INTO schools (school_code, smis_code, name, address, subdistrict, district, province, zipcode, affiliation, education_area, fiscal_year, director_name, phone, email, logo_url, student_count, project_count, total_budget, admin_teacher_id, admin_teacher_name, notes, is_active, school_key)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+          `INSERT INTO schools (school_code, smis_code, name, province, education_area, director_name, phone, email, is_active, school_key, address, subdistrict, district, zipcode, affiliation, fiscal_year, logo_url)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              name = VALUES(name),
-             address = VALUES(address),
-             subdistrict = VALUES(subdistrict),
-             district = VALUES(district),
+             school_code = VALUES(school_code),
              province = VALUES(province),
-             zipcode = VALUES(zipcode),
-             affiliation = VALUES(affiliation),
              education_area = VALUES(education_area),
-             fiscal_year = VALUES(fiscal_year),
              director_name = VALUES(director_name),
              phone = VALUES(phone),
              email = VALUES(email),
+             address = VALUES(address), subdistrict = VALUES(subdistrict), district = VALUES(district),
+             zipcode = VALUES(zipcode), affiliation = VALUES(affiliation), fiscal_year = VALUES(fiscal_year),
              logo_url = VALUES(logo_url),
-             student_count = VALUES(student_count),
-             project_count = VALUES(project_count),
-             total_budget = VALUES(total_budget),
-             admin_teacher_id = VALUES(admin_teacher_id),
-             admin_teacher_name = VALUES(admin_teacher_name),
-             notes = VALUES(notes),
              updated_at = CURRENT_TIMESTAMP`,
-          [cleanCode, cleanSmis, sName, address, subdistrict, district, province, zipcode, affiliation, educationArea, fiscalYear, directorName, phone, email, logoUrl, studentCount, projectCount, totalBudget, adminTeacherId, adminTeacherName, notes, `SCH-${cleanSmis}`]
+          [cleanCode, cleanSmis, sName, s.province || '', s.educationArea || '', s.directorName || '', s.phone || '', s.email || '', `SCH-${cleanSmis}`, s.address || '', s.subdistrict || '', s.district || '', s.zipcode || '', s.affiliation || '', Number(s.fiscalYear) || null, s.logoUrl || null]
         );
         schoolId = insertRes.insertId || schoolId || 1;
       }
@@ -752,17 +666,14 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       schoolId = (schRows && schRows.length > 0) ? schRows[0].id : 1;
     }
 
-    // 2. Sync Fiscal Years for this school (Enforce only ONE active year)
+    // 2. Sync Fiscal Years for this school
     if (Array.isArray(data.fiscalYears)) {
       if (data.fiscalYears.length === 0) {
         await conn.query('DELETE FROM fiscal_years WHERE school_id = ?', [schoolId]);
       } else {
         const keptFyIds: number[] = [];
-        const activeFyIdInPayload = data.activeFiscalYear?.id || data.fiscalYears.find((fy: any) => fy.isActive)?.id;
-
         for (const fy of data.fiscalYears) {
           if (!fy.year) continue;
-          const isThisActive = activeFyIdInPayload ? (fy.id === activeFyIdInPayload || fy.year === data.activeFiscalYear?.year) : Boolean(fy.isActive);
           if (fy.id && fy.id > 0) {
             await conn.query(
               `INSERT INTO fiscal_years (id, school_id, year, is_active, start_date, end_date, total_students, teacher_count)
@@ -774,14 +685,14 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
                  end_date = VALUES(end_date),
                  total_students = VALUES(total_students),
                  teacher_count = VALUES(teacher_count)`,
-              [fy.id, schoolId, fy.year, isThisActive ? 1 : 0, fy.startDate || null, fy.endDate || null, Number(fy.totalStudents) || 0, Number(fy.teacherCount) || 0]
+              [fy.id, schoolId, fy.year, fy.isActive ? 1 : 0, fy.startDate || null, fy.endDate || null, Number(fy.totalStudents) || 0, Number(fy.teacherCount) || 0]
             );
             keptFyIds.push(fy.id);
           } else {
             const [r]: any = await conn.query(
               `INSERT INTO fiscal_years (school_id, year, is_active, start_date, end_date, total_students, teacher_count)
                VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              [schoolId, fy.year, isThisActive ? 1 : 0, fy.startDate || null, fy.endDate || null, Number(fy.totalStudents) || 0, Number(fy.teacherCount) || 0]
+              [schoolId, fy.year, fy.isActive ? 1 : 0, fy.startDate || null, fy.endDate || null, Number(fy.totalStudents) || 0, Number(fy.teacherCount) || 0]
             );
             if (r.insertId) keptFyIds.push(r.insertId);
           }
@@ -792,280 +703,125 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       }
     }
 
-    if (data.activeFiscalYear) {
-      await conn.query('UPDATE fiscal_years SET is_active = 0 WHERE school_id = ?', [schoolId]);
-      if (data.activeFiscalYear.id && data.activeFiscalYear.id > 0) {
-        await conn.query('UPDATE fiscal_years SET is_active = 1 WHERE school_id = ? AND id = ?', [schoolId, data.activeFiscalYear.id]);
-      } else if (data.activeFiscalYear.year) {
-        await conn.query('UPDATE fiscal_years SET is_active = 1 WHERE school_id = ? AND year = ?', [schoolId, data.activeFiscalYear.year]);
+    // User accounts are written only through authentication/user endpoints.
+
+    // Save only the active fiscal year for these menu actions. Database IDs are global,
+    // so never trust IDs generated from a browser's local list.
+    if (Array.isArray(data.students) || Array.isArray(data.revenues)) {
+      const requestedYear = Number(data.activeFiscalYear?.year || data.fiscalYear?.year || 2569);
+      const [years]: any = await conn.query('SELECT id FROM fiscal_years WHERE school_id = ? AND year = ? LIMIT 1', [schoolId, requestedYear]);
+      let fiscalYearId = years[0]?.id;
+      if (!fiscalYearId) {
+        const gregorian = requestedYear - 543;
+        const [created]: any = await conn.query(
+          'INSERT INTO fiscal_years (school_id, year, is_active, start_date, end_date, total_students, teacher_count) VALUES (?, ?, 1, ?, ?, 0, 0)',
+          [schoolId, requestedYear, `${gregorian - 1}-10-01`, `${gregorian}-09-30`]
+        );
+        fiscalYearId = created.insertId;
       }
-      if (data.activeFiscalYear.year) {
-        await conn.query('UPDATE schools SET fiscal_year = ? WHERE id = ?', [data.activeFiscalYear.year, schoolId]);
-      }
-    }
-
-    // 3. Sync Users for this school (Safely upsert users, NEVER delete to prevent losing registered teachers)
-    if (Array.isArray(data.users) && data.users.length > 0) {
-      for (const u of data.users) {
-        if (!u.username || !u.fullName) continue;
-        const userPass = u.password || u.passwordHash || '123456';
-        if (u.id && u.id > 0) {
-          await conn.query(
-            `INSERT INTO users (id, school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-               username = VALUES(username),
-               citizen_id = VALUES(citizen_id),
-               password_hash = VALUES(password_hash),
-               full_name = VALUES(full_name),
-               email = VALUES(email),
-               role = VALUES(role),
-               department = VALUES(department),
-               position = VALUES(position),
-               phone = VALUES(phone),
-               is_active = VALUES(is_active),
-               status = VALUES(status),
-               is_password_changed = VALUES(is_password_changed)`,
-            [
-              u.id,
-              schoolId,
-              u.username,
-              u.citizenId || '',
-              userPass,
-              u.fullName,
-              u.email || '',
-              u.role || 'teacher',
-              u.department || '',
-              u.position || '',
-              u.phone || '',
-              u.isActive !== false ? 1 : 0,
-              u.status || 'approved',
-              u.isPasswordChanged ? 1 : 0
-            ]
-          );
-        } else {
-          await conn.query(
-            `INSERT INTO users (school_id, username, citizen_id, password_hash, full_name, email, role, department, position, phone, is_active, status, is_password_changed)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-               full_name = VALUES(full_name),
-               email = VALUES(email),
-               phone = VALUES(phone),
-               role = VALUES(role),
-               position = VALUES(position)`,
-            [
-              schoolId,
-              u.username,
-              u.citizenId || '',
-              userPass,
-              u.fullName,
-              u.email || '',
-              u.role || 'teacher',
-              u.department || '',
-              u.position || '',
-              u.phone || '',
-              u.isActive !== false ? 1 : 0,
-              u.status || 'approved',
-              u.isPasswordChanged ? 1 : 0
-            ]
-          );
-        }
-      }
-    }
-
-    // 4. Sync Students for this school (Properly scoped by school_id and fiscal_year_id)
-    if (Array.isArray(data.students)) {
-      const targetFyId = Number(data.activeFiscalYear?.id) || (data.students[0] ? Number(data.students[0].fiscalYearId) : 1);
-
-      // Collect all fiscalYearIds affected
-      const affectedFyIds = new Set<number>();
-      if (targetFyId) affectedFyIds.add(targetFyId);
-      data.students.forEach((st: any) => {
-        if (st.fiscalYearId) affectedFyIds.add(Number(st.fiscalYearId));
-      });
-
-      for (const fyId of affectedFyIds) {
-        const fyStudents = data.students.filter((st: any) => (Number(st.fiscalYearId) || targetFyId) === fyId);
-        const keptStudentIds: number[] = [];
-
-        for (const st of fyStudents) {
-          if (!st.gradeLevel) continue;
-          if (st.id && st.id > 0) {
-            await conn.query(
-              `INSERT INTO students (id, school_id, fiscal_year_id, grade_level, stage, male_count, female_count, total_count)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-               ON DUPLICATE KEY UPDATE
-                 fiscal_year_id = VALUES(fiscal_year_id),
-                 grade_level = VALUES(grade_level),
-                 stage = VALUES(stage),
-                 male_count = VALUES(male_count),
-                 female_count = VALUES(female_count),
-                 total_count = VALUES(total_count)`,
-              [st.id, schoolId, fyId, st.gradeLevel, st.stage || 'ประถม', Number(st.maleCount) || 0, Number(st.femaleCount) || 0, Number(st.totalCount) || 0]
-            );
-            keptStudentIds.push(st.id);
-          } else {
-            const [sr]: any = await conn.query(
-              `INSERT INTO students (school_id, fiscal_year_id, grade_level, stage, male_count, female_count, total_count)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              [schoolId, fyId, st.gradeLevel, st.stage || 'ประถม', Number(st.maleCount) || 0, Number(st.femaleCount) || 0, Number(st.totalCount) || 0]
-            );
-            if (sr.insertId) keptStudentIds.push(sr.insertId);
+      await conn.beginTransaction();
+      try {
+        if (Array.isArray(data.students)) {
+          const kept: number[] = [];
+          for (const st of data.students) {
+            if (!st.gradeLevel?.trim()) continue;
+            const [sameGrade]: any = await conn.query('SELECT id FROM students WHERE school_id = ? AND fiscal_year_id = ? AND grade_level = ? LIMIT 1', [schoolId, fiscalYearId, st.gradeLevel.trim()]);
+            const [sameId]: any = sameGrade.length ? [[]] : await conn.query('SELECT id FROM students WHERE id = ? AND school_id = ? AND fiscal_year_id = ? LIMIT 1', [st.id, schoolId, fiscalYearId]);
+            const id = sameGrade[0]?.id || sameId[0]?.id;
+            const values = [st.gradeLevel.trim(), st.stage, Number(st.maleCount) || 0, Number(st.femaleCount) || 0, (Number(st.maleCount) || 0) + (Number(st.femaleCount) || 0)];
+            if (id) {
+              await conn.query('UPDATE students SET grade_level = ?, stage = ?, male_count = ?, female_count = ?, total_count = ? WHERE id = ? AND school_id = ?', [...values, id, schoolId]);
+              kept.push(id);
+            } else {
+              const [created]: any = await conn.query('INSERT INTO students (school_id, fiscal_year_id, grade_level, stage, male_count, female_count, total_count) VALUES (?, ?, ?, ?, ?, ?, ?)', [schoolId, fiscalYearId, ...values]);
+              kept.push(created.insertId);
+            }
           }
+          if (kept.length) await conn.query(`DELETE FROM students WHERE school_id = ? AND fiscal_year_id = ? AND id NOT IN (${kept.map(() => '?').join(',')})`, [schoolId, fiscalYearId, ...kept]);
+          else await conn.query('DELETE FROM students WHERE school_id = ? AND fiscal_year_id = ?', [schoolId, fiscalYearId]);
         }
-
-        // Delete any grade levels removed for this specific school and fiscal year!
-        if (keptStudentIds.length > 0) {
-          await conn.query(
-            `DELETE FROM students WHERE school_id = ? AND fiscal_year_id = ? AND id NOT IN (${keptStudentIds.join(',')})`,
-            [schoolId, fyId]
-          );
-        } else {
-          await conn.query(`DELETE FROM students WHERE school_id = ? AND fiscal_year_id = ?`, [schoolId, fyId]);
+        if (Array.isArray(data.revenues)) {
+          const kept: number[] = [];
+          for (const r of data.revenues) {
+            if (!r.itemName?.trim()) continue;
+            const [owned]: any = await conn.query('SELECT id FROM revenues WHERE id = ? AND school_id = ? AND fiscal_year_id = ? LIMIT 1', [r.id, schoolId, fiscalYearId]);
+            const [sameName]: any = owned.length ? [[]] : await conn.query('SELECT id FROM revenues WHERE school_id = ? AND fiscal_year_id = ? AND item_name = ? LIMIT 1', [schoolId, fiscalYearId, r.itemName.trim()]);
+            const id = owned[0]?.id || sameName[0]?.id;
+            const values = [r.category || 'other', r.itemName.trim(), Number(r.ratePerHead) || 0, Number(r.eligibleCount) || 0, Number(r.calculatedAmount) || 0, r.isCustomRate ? 1 : 0, r.note || ''];
+            if (id) {
+              await conn.query('UPDATE revenues SET category = ?, item_name = ?, rate_per_head = ?, eligible_count = ?, calculated_amount = ?, is_custom_rate = ?, note = ? WHERE id = ? AND school_id = ?', [...values, id, schoolId]);
+              kept.push(id);
+            } else {
+              const [created]: any = await conn.query('INSERT INTO revenues (school_id, fiscal_year_id, category, item_name, rate_per_head, eligible_count, calculated_amount, is_custom_rate, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [schoolId, fiscalYearId, ...values]);
+              kept.push(created.insertId);
+            }
+          }
+          if (kept.length) await conn.query(`DELETE FROM revenues WHERE school_id = ? AND fiscal_year_id = ? AND id NOT IN (${kept.map(() => '?').join(',')})`, [schoolId, fiscalYearId, ...kept]);
+          else await conn.query('DELETE FROM revenues WHERE school_id = ? AND fiscal_year_id = ?', [schoolId, fiscalYearId]);
         }
-
-        // Update total_students in fiscal_years table and school student count
-        try {
-          const [sumRes]: any = await conn.query(
-            'SELECT COALESCE(SUM(total_count), 0) as tot FROM students WHERE school_id = ? AND fiscal_year_id = ?',
-            [schoolId, fyId]
-          );
-          const totStudents = sumRes && sumRes[0] ? Number(sumRes[0].tot) || 0 : 0;
-          await conn.query(
-            'UPDATE fiscal_years SET total_students = ? WHERE school_id = ? AND id = ?',
-            [totStudents, schoolId, fyId]
-          );
-          await conn.query('UPDATE schools SET student_count = ? WHERE id = ?', [totStudents, schoolId]);
-        } catch (e) {}
+        await conn.commit();
+      } catch (error) {
+        await conn.rollback();
+        throw error;
       }
     }
 
-    // 5. Sync Revenues for this school (Properly scoped by school_id and fiscal_year_id)
-    if (Array.isArray(data.revenues)) {
-      const targetFyId = Number(data.activeFiscalYear?.id) || (data.revenues[0] ? Number(data.revenues[0].fiscalYearId) : 1);
-
-      const affectedFyIds = new Set<number>();
-      if (targetFyId) affectedFyIds.add(targetFyId);
-      data.revenues.forEach((r: any) => {
-        if (r.fiscalYearId) affectedFyIds.add(Number(r.fiscalYearId));
-      });
-
-      for (const fyId of affectedFyIds) {
-        const fyRevenues = data.revenues.filter((r: any) => (Number(r.fiscalYearId) || targetFyId) === fyId);
-        const keptRevIds: number[] = [];
-
-        for (const r of fyRevenues) {
-          if (!r.itemName) continue;
-          if (r.id && r.id > 0) {
-            await conn.query(
-              `INSERT INTO revenues (id, school_id, fiscal_year_id, category, item_name, rate_per_head, eligible_count, calculated_amount, is_custom_rate, note)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON DUPLICATE KEY UPDATE
-                 fiscal_year_id = VALUES(fiscal_year_id),
-                 category = VALUES(category),
-                 item_name = VALUES(item_name),
-                 rate_per_head = VALUES(rate_per_head),
-                 eligible_count = VALUES(eligible_count),
-                 calculated_amount = VALUES(calculated_amount),
-                 is_custom_rate = VALUES(is_custom_rate),
-                 note = VALUES(note)`,
-              [r.id, schoolId, fyId, r.category || 'subsidy', r.itemName, Number(r.ratePerHead) || 0, Number(r.eligibleCount) || 0, Number(r.calculatedAmount) || 0, r.isCustomRate ? 1 : 0, r.note || '']
-            );
-            keptRevIds.push(r.id);
-          } else {
-            const [rr]: any = await conn.query(
-              `INSERT INTO revenues (school_id, fiscal_year_id, category, item_name, rate_per_head, eligible_count, calculated_amount, is_custom_rate, note)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [schoolId, fyId, r.category || 'subsidy', r.itemName, Number(r.ratePerHead) || 0, Number(r.eligibleCount) || 0, Number(r.calculatedAmount) || 0, r.isCustomRate ? 1 : 0, r.note || '']
-            );
-            if (rr.insertId) keptRevIds.push(rr.insertId);
+    // 6. Save reserves, departments and budget basis together for the selected year.
+    if (Array.isArray(data.allocations) || data.budgetSettings) {
+      const requestedYear = Number(data.activeFiscalYear?.year);
+      if (!Number.isInteger(requestedYear) || requestedYear < 2500 || requestedYear > 2600) throw new Error('ปีงบประมาณไม่ถูกต้อง');
+      const [years]: any = await conn.query('SELECT id FROM fiscal_years WHERE school_id = ? AND year = ? LIMIT 1', [schoolId, requestedYear]);
+      const fiscalId = years[0]?.id;
+      if (!fiscalId) throw new Error('ไม่พบปีงบประมาณใน MySQL');
+      await conn.beginTransaction();
+      try {
+        if (Array.isArray(data.allocations)) {
+          const kept: number[] = [];
+          for (const a of data.allocations) {
+            if (!a.departmentName?.trim()) continue;
+            const type = ['utility', 'other'].includes(a.reserveType) ? a.reserveType : null;
+            let [owned]: any = Number(a.id) > 0 ? await conn.query('SELECT id FROM budget_allocations WHERE id = ? AND school_id = ? AND fiscal_year_id = ?', [a.id, schoolId, fiscalId]) : [[]];
+            if (!owned.length && type) [owned] = await conn.query('SELECT id FROM budget_allocations WHERE school_id = ? AND fiscal_year_id = ? AND reserve_type = ? LIMIT 1', [schoolId, fiscalId, type]);
+            const id = owned[0]?.id;
+            const values = [a.departmentName.trim(), Number(a.percentage) || 0, Number(a.allocatedAmount) || 0, Number(a.spentAmount) || 0, Number(a.remainingAmount) || 0, a.colorHex || '#2563eb', a.description || '', type];
+            if (id) await conn.query('UPDATE budget_allocations SET department_name = ?, percentage = ?, allocated_amount = ?, spent_amount = ?, remaining_amount = ?, color_hex = ?, description = ?, reserve_type = ? WHERE id = ? AND school_id = ? AND fiscal_year_id = ?', [...values, id, schoolId, fiscalId]);
+            else {
+              const [created]: any = await conn.query('INSERT INTO budget_allocations (school_id, fiscal_year_id, department_name, percentage, allocated_amount, spent_amount, remaining_amount, color_hex, description, reserve_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [schoolId, fiscalId, ...values]);
+              kept.push(created.insertId);
+            }
+            if (id) kept.push(id);
           }
+          if (kept.length) await conn.query(`DELETE FROM budget_allocations WHERE school_id = ? AND fiscal_year_id = ? AND id NOT IN (${kept.map(() => '?').join(',')})`, [schoolId, fiscalId, ...kept]);
+          else await conn.query('DELETE FROM budget_allocations WHERE school_id = ? AND fiscal_year_id = ?', [schoolId, fiscalId]);
         }
-
-        if (keptRevIds.length > 0) {
-          await conn.query(
-            `DELETE FROM revenues WHERE school_id = ? AND fiscal_year_id = ? AND id NOT IN (${keptRevIds.join(',')})`,
-            [schoolId, fyId]
-          );
-        } else {
-          await conn.query(`DELETE FROM revenues WHERE school_id = ? AND fiscal_year_id = ?`, [schoolId, fyId]);
-        }
-      }
-    }
-
-    // 6. Sync Allocations for this school
-    if (Array.isArray(data.allocations)) {
-      if (data.allocations.length === 0) {
-        await conn.query('DELETE FROM budget_allocations WHERE school_id = ?', [schoolId]);
-      } else {
-        const keptAllocIds: number[] = [];
-        for (const a of data.allocations) {
-          if (!a.departmentName) continue;
-          if (a.id && a.id > 0) {
-            await conn.query(
-              `INSERT INTO budget_allocations (id, school_id, fiscal_year_id, department_name, percentage, allocated_amount, spent_amount, remaining_amount, color_hex, description)
-               VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
-               ON DUPLICATE KEY UPDATE
-                 department_name = VALUES(department_name),
-                 percentage = VALUES(percentage),
-                 allocated_amount = VALUES(allocated_amount),
-                 spent_amount = VALUES(spent_amount),
-                 remaining_amount = VALUES(remaining_amount),
-                 color_hex = VALUES(color_hex),
-                 description = VALUES(description)`,
-              [a.id, schoolId, a.departmentName, Number(a.percentage) || 0, Number(a.allocatedAmount) || 0, Number(a.spentAmount) || 0, Number(a.remainingAmount) || 0, a.colorHex || '#2563eb', a.description || '']
-            );
-            keptAllocIds.push(a.id);
-          } else {
-            const [ar]: any = await conn.query(
-              `INSERT INTO budget_allocations (school_id, fiscal_year_id, department_name, percentage, allocated_amount, spent_amount, remaining_amount, color_hex, description)
-               VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
-              [schoolId, a.departmentName, Number(a.percentage) || 0, Number(a.allocatedAmount) || 0, Number(a.spentAmount) || 0, Number(a.remainingAmount) || 0, a.colorHex || '#2563eb', a.description || '']
-            );
-            if (ar.insertId) keptAllocIds.push(ar.insertId);
-          }
-        }
-        if (keptAllocIds.length > 0) {
-          await conn.query(`DELETE FROM budget_allocations WHERE school_id = ? AND id NOT IN (${keptAllocIds.join(',')})`, [schoolId]);
-        }
-      }
+        if (data.budgetSettings) await conn.query('INSERT INTO budget_settings (school_id, fiscal_year_id, carryover, manual_total) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE carryover = VALUES(carryover), manual_total = VALUES(manual_total)', [schoolId, fiscalId, Number(data.budgetSettings.carryover) || 0, data.budgetSettings.manualTotal == null ? null : Number(data.budgetSettings.manualTotal)]);
+        await conn.commit();
+      } catch (error) { await conn.rollback(); throw error; }
     }
 
     // 7. Sync Learner Activities for this school
     if (Array.isArray(data.activities)) {
-      if (data.activities.length === 0) {
-        await conn.query('DELETE FROM learner_activities WHERE school_id = ?', [schoolId]);
-      } else {
-        const keptActIds: number[] = [];
+      const year = Number(data.activeFiscalYear?.year);
+      const [fys]: any = await conn.query('SELECT id FROM fiscal_years WHERE school_id = ? AND year = ? LIMIT 1', [schoolId, year]);
+      const fiscalId = fys[0]?.id;
+      if (!fiscalId) throw new Error('ไม่พบปีงบประมาณของกิจกรรมพัฒนาผู้เรียน');
+      await conn.beginTransaction();
+      try {
+        const kept: number[] = [];
         for (const act of data.activities) {
-          if (!act.activityName) continue;
-          if (act.id && act.id > 0) {
-            await conn.query(
-              `INSERT INTO learner_activities (id, school_id, fiscal_year_id, activity_name, percentage, allocated_amount, spent_amount, remaining_amount, note)
-               VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
-               ON DUPLICATE KEY UPDATE
-                 activity_name = VALUES(activity_name),
-                 percentage = VALUES(percentage),
-                 allocated_amount = VALUES(allocated_amount),
-                 spent_amount = VALUES(spent_amount),
-                 remaining_amount = VALUES(remaining_amount),
-                 note = VALUES(note)`,
-              [act.id, schoolId, act.activityName, Number(act.percentage) || 0, Number(act.allocatedAmount) || 0, Number(act.spentAmount) || 0, Number(act.remainingAmount) || 0, act.note || '']
-            );
-            keptActIds.push(act.id);
-          } else {
-            const [actRes]: any = await conn.query(
-              `INSERT INTO learner_activities (school_id, fiscal_year_id, activity_name, percentage, allocated_amount, spent_amount, remaining_amount, note)
-               VALUES (?, 1, ?, ?, ?, ?, ?, ?)`,
-              [schoolId, act.activityName, Number(act.percentage) || 0, Number(act.allocatedAmount) || 0, Number(act.spentAmount) || 0, Number(act.remainingAmount) || 0, act.note || '']
-            );
-            if (actRes.insertId) keptActIds.push(actRes.insertId);
-          }
+          if (!act.activityName?.trim()) continue;
+          const [owned]: any = Number(act.id) > 0 ? await conn.query('SELECT id FROM learner_activities WHERE id = ? AND school_id = ? AND fiscal_year_id = ?', [act.id, schoolId, fiscalId]) : [[]];
+          let id = owned[0]?.id;
+          const values = [act.activityName.trim(), Number(act.percentage) || 0, Number(act.allocatedAmount) || 0, Number(act.spentAmount) || 0, Number(act.remainingAmount) || 0, act.note || '', act.description || ''];
+          if (id) await conn.query('UPDATE learner_activities SET activity_name = ?, percentage = ?, allocated_amount = ?, spent_amount = ?, remaining_amount = ?, note = ?, description = ? WHERE id = ? AND school_id = ? AND fiscal_year_id = ?', [...values, id, schoolId, fiscalId]);
+          else { const [created]: any = await conn.query('INSERT INTO learner_activities (school_id, fiscal_year_id, activity_name, percentage, allocated_amount, spent_amount, remaining_amount, note, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [schoolId, fiscalId, ...values]); id = created.insertId; }
+          kept.push(id);
         }
-        if (keptActIds.length > 0) {
-          await conn.query(`DELETE FROM learner_activities WHERE school_id = ? AND id NOT IN (${keptActIds.join(',')})`, [schoolId]);
-        }
-      }
+        if (kept.length) await conn.query(`DELETE FROM learner_activities WHERE school_id = ? AND fiscal_year_id = ? AND id NOT IN (${kept.map(() => '?').join(',')})`, [schoolId, fiscalId, ...kept]);
+        else await conn.query('DELETE FROM learner_activities WHERE school_id = ? AND fiscal_year_id = ?', [schoolId, fiscalId]);
+        await conn.query('INSERT INTO budget_settings (school_id, fiscal_year_id, learner_initialized) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE learner_initialized = 1', [schoolId, fiscalId]);
+        await conn.commit();
+      } catch (error) { await conn.rollback(); throw error; }
     }
 
     // 8. Sync Strategies for this school
@@ -1268,19 +1024,19 @@ export async function saveAppData(data: any, schoolIdParam?: number): Promise<{ 
       message: 'บันทึกข้อมูลลงฐานข้อมูล MySQL จริงสำเร็จสมบูรณ์ 100%',
     };
   } catch (err: any) {
-    console.warn('[AI Studio] MySQL offline — saved to local storage backup:', err.message);
+    console.error('MySQL save failed:', err);
     return {
-      success: true,
-      message: 'บันทึกข้อมูลเรียบร้อยแล้ว (จัดเก็บใน Local Storage สำรอง เนื่องจากยังไม่ได้เชื่อมต่อ MySQL)',
+      success: false,
+      message: 'ไม่สามารถบันทึกข้อมูลลง MySQL ได้',
       error: err.message,
     };
   }
 }
 
 /**
- * ดึง App Data ทั้งหมดจาก MySQL โดยตรงตาม school_id และ fiscal_year_id
+ * ดึง App Data ทั้งหมดจาก MySQL โดยตรงตาม school_id
  */
-export async function loadAppData(schoolIdParam?: number, fiscalYearIdParam?: number): Promise<any> {
+export async function loadAppData(schoolIdParam?: number): Promise<any> {
   let conn: any = null;
   try {
     conn = await getDirectConnection();
@@ -1301,53 +1057,21 @@ export async function loadAppData(schoolIdParam?: number, fiscalYearIdParam?: nu
 
     const schoolId = s.id;
 
-    // 2. Query fiscal_years for this school
-    let [fiscalYears]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? ORDER BY year DESC', [schoolId]);
-    if (!fiscalYears || fiscalYears.length === 0) {
-      // Seed default clean fiscal year 2568 for this school
-      await conn.query(
-        `INSERT INTO fiscal_years (school_id, year, is_active, start_date, end_date, total_students, teacher_count)
-         VALUES (?, 2568, 1, '2024-10-01', '2025-09-30', 0, 0)`,
-        [schoolId]
-      );
-      const [newFyRows]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? ORDER BY year DESC', [schoolId]);
-      fiscalYears = newFyRows || [];
-    }
-
-    // Determine active fiscal year
-    let activeFy: any = null;
-    if (fiscalYearIdParam && fiscalYearIdParam > 0) {
-      activeFy = fiscalYears.find((fy: any) => fy.id === fiscalYearIdParam);
-    }
-    if (!activeFy) {
-      activeFy = fiscalYears.find((fy: any) => fy.is_active === 1);
-    }
-    if (!activeFy && fiscalYears.length > 0) {
-      activeFy = fiscalYears[0];
-    }
-
-    const activeFyId = activeFy ? activeFy.id : 1;
-
-    // Ensure ONLY the active fiscal year has is_active = 1 in MySQL
-    if (activeFy) {
-      await conn.query('UPDATE fiscal_years SET is_active = 0 WHERE school_id = ? AND id != ?', [schoolId, activeFy.id]);
-      await conn.query('UPDATE fiscal_years SET is_active = 1 WHERE school_id = ? AND id = ?', [schoolId, activeFy.id]);
-      if (activeFy.year) {
-        await conn.query('UPDATE schools SET fiscal_year = ? WHERE id = ?', [activeFy.year, schoolId]);
-      }
-    }
-
-    // Re-fetch fiscal years to reflect updated is_active flags
-    const [updatedFys]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? ORDER BY year DESC', [schoolId]);
-
-    // 3. Query all tables filtered by school_id AND fiscal_year_id!
+    // 2. Query all tables filtered by school_id
+    const [fiscalYears]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? ORDER BY year DESC', [schoolId]);
+    const selectedYear = fiscalYears.find((fy: any) => fy.is_active === 1) || fiscalYears[0];
     const [users]: any = await conn.query('SELECT * FROM users WHERE school_id = ? ORDER BY id ASC', [schoolId]);
-    const [students]: any = await conn.query('SELECT * FROM students WHERE school_id = ? AND fiscal_year_id = ? ORDER BY id ASC', [schoolId, activeFyId]);
-    const [revenues]: any = await conn.query('SELECT * FROM revenues WHERE school_id = ? AND fiscal_year_id = ? ORDER BY id ASC', [schoolId, activeFyId]);
-    const [allocations]: any = await conn.query('SELECT * FROM budget_allocations WHERE school_id = ? AND (fiscal_year_id = ? OR fiscal_year_id = 1) ORDER BY id ASC', [schoolId, activeFyId]);
-    const [activities]: any = await conn.query('SELECT * FROM learner_activities WHERE school_id = ? AND (fiscal_year_id = ? OR fiscal_year_id = 1) ORDER BY id ASC', [schoolId, activeFyId]);
+    const [students]: any = await conn.query('SELECT * FROM students WHERE school_id = ? AND fiscal_year_id = ? ORDER BY id ASC', [schoolId, selectedYear?.id || 0]);
+    const [revenues]: any = await conn.query('SELECT * FROM revenues WHERE school_id = ? AND fiscal_year_id = ? ORDER BY id ASC', [schoolId, selectedYear?.id || 0]);
+    const [allocations]: any = await conn.query('SELECT * FROM budget_allocations WHERE school_id = ? AND fiscal_year_id = ? ORDER BY id ASC', [schoolId, selectedYear?.id || 0]);
+    let budgetSettings: any = null;
+    try {
+      const [settings]: any = await conn.query('SELECT carryover, manual_total, learner_initialized FROM budget_settings WHERE school_id = ? AND fiscal_year_id = ? LIMIT 1', [schoolId, selectedYear?.id || 0]);
+      budgetSettings = settings[0];
+    } catch { /* Older databases have no budget settings until the first save. */ }
+    const [activities]: any = await conn.query('SELECT * FROM learner_activities WHERE school_id = ? AND fiscal_year_id = ? ORDER BY id ASC', [schoolId, selectedYear?.id || 0]);
     const [strategies]: any = await conn.query('SELECT * FROM strategies WHERE school_id = ? ORDER BY id ASC', [schoolId]);
-    const [projects]: any = await conn.query('SELECT * FROM projects WHERE school_id = ? AND (fiscal_year_id = ? OR fiscal_year_id = 1) ORDER BY id ASC', [schoolId, activeFyId]);
+    const [projects]: any = await conn.query('SELECT * FROM projects WHERE school_id = ? ORDER BY id ASC', [schoolId]);
     const [transactions]: any = await conn.query('SELECT * FROM budget_transactions WHERE school_id = ? ORDER BY id DESC', [schoolId]);
 
     await conn.end();
@@ -1358,30 +1082,18 @@ export async function loadAppData(schoolIdParam?: number, fiscalYearIdParam?: nu
         schoolCode: s.school_code,
         smisCode: s.smis_code,
         name: s.name,
-        address: s.address || '',
-        subdistrict: s.subdistrict || '',
-        district: s.district || '',
-        province: s.province || '',
-        zipcode: s.zipcode || '',
-        affiliation: s.affiliation || 'สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.)',
-        educationArea: s.education_area || '',
-        fiscalYear: Number(s.fiscal_year) || 2568,
-        directorName: s.director_name || '',
-        phone: s.phone || '',
-        email: s.email || '',
+        province: s.province,
+        educationArea: s.education_area,
+        address: s.address || '', subdistrict: s.subdistrict || '', district: s.district || '',
+        zipcode: s.zipcode || '', affiliation: s.affiliation || '', fiscalYear: s.fiscal_year || undefined,
         logoUrl: s.logo_url || '',
-        notes: s.notes || '',
-        studentCount: Number(s.student_count) || 0,
-        projectCount: Number(s.project_count) || 0,
-        totalBudget: Number(s.total_budget) || 0,
-        adminUsername: s.admin_username,
-        adminPasswordPlain: s.admin_password_plain,
-        adminTeacherId: s.admin_teacher_id,
-        adminTeacherName: s.admin_teacher_name,
+        directorName: s.director_name,
+        phone: s.phone,
+        email: s.email,
         isActive: s.is_active === 1,
         schoolKey: s.school_key,
       },
-      fiscalYears: (updatedFys || []).map((fy: any) => ({
+      fiscalYears: (fiscalYears || []).map((fy: any) => ({
         id: fy.id,
         schoolId: fy.school_id,
         year: fy.year,
@@ -1390,17 +1102,11 @@ export async function loadAppData(schoolIdParam?: number, fiscalYearIdParam?: nu
         endDate: fy.end_date,
         totalStudents: Number(fy.total_students) || 0,
         teacherCount: Number(fy.teacher_count) || 0,
+        isProposalOpen: fy.is_proposal_open !== 0,
+        proposalOpenDate: fy.proposal_open_date ? new Date(fy.proposal_open_date).toISOString().slice(0, 10) : undefined,
+        proposalCloseDate: fy.proposal_close_date ? new Date(fy.proposal_close_date).toISOString().slice(0, 10) : undefined,
+        proposalNotice: fy.proposal_notice || '',
       })),
-      activeFiscalYear: activeFy ? {
-        id: activeFy.id,
-        schoolId: activeFy.school_id,
-        year: activeFy.year,
-        isActive: true,
-        startDate: activeFy.start_date,
-        endDate: activeFy.end_date,
-        totalStudents: Number(activeFy.total_students) || 0,
-        teacherCount: Number(activeFy.teacher_count) || 0,
-      } : undefined,
       users: (users || []).map((u: any) => ({
         id: u.id,
         schoolId: u.school_id,
@@ -1451,7 +1157,10 @@ export async function loadAppData(schoolIdParam?: number, fiscalYearIdParam?: nu
         remainingAmount: Number(a.remaining_amount) || 0,
         colorHex: a.color_hex,
         description: a.description,
+        reserveType: a.reserve_type || undefined,
       })),
+      budgetSettings: { carryover: Number(budgetSettings?.carryover) || 0, manualTotal: budgetSettings?.manual_total == null ? null : Number(budgetSettings.manual_total) },
+      activitiesInitialized: budgetSettings?.learner_initialized === 1,
       activities: (activities || []).map((act: any) => ({
         id: act.id,
         schoolId: act.school_id,
@@ -1462,6 +1171,7 @@ export async function loadAppData(schoolIdParam?: number, fiscalYearIdParam?: nu
         spentAmount: Number(act.spent_amount) || 0,
         remainingAmount: Number(act.remaining_amount) || 0,
         note: act.note,
+        description: act.description || '',
       })),
       strategies: (strategies || []).map((st: any) => ({
         id: st.id,
@@ -1521,131 +1231,5 @@ export async function loadAppData(schoolIdParam?: number, fiscalYearIdParam?: nu
       } catch (e) {}
     }
     return null;
-  }
-}
-
-/**
- * เพิ่มปีงบประมาณใหม่ลงตาราง fiscal_years ของโรงเรียน และกำหนดให้เป็นปีปัจจุบัน (is_active = 1)
- * ดึง ID จาก MySQL AUTO_INCREMENT เสมอ (ห้ามใช้ synthetic ID)
- */
-export async function addFiscalYearToDb(schoolId: number, yearNum: number, isActive: boolean = true): Promise<any> {
-  let conn: any = null;
-  try {
-    conn = await getDirectConnection();
-    // 1. ตรวจสอบว่าปีนี้มีอยู่แล้วหรือไม่
-    const [existing]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? AND year = ? LIMIT 1', [schoolId, yearNum]);
-    let targetId: number;
-
-    if (isActive) {
-      await conn.query('UPDATE fiscal_years SET is_active = 0 WHERE school_id = ?', [schoolId]);
-    }
-
-    if (existing && existing.length > 0) {
-      targetId = existing[0].id;
-      if (isActive) {
-        await conn.query('UPDATE fiscal_years SET is_active = 1 WHERE school_id = ? AND id = ?', [schoolId, targetId]);
-      }
-    } else {
-      const [res]: any = await conn.query(
-        `INSERT INTO fiscal_years (school_id, year, is_active, start_date, end_date, total_students, teacher_count)
-         VALUES (?, ?, ?, ?, ?, 0, 0)`,
-        [
-          schoolId,
-          yearNum,
-          isActive ? 1 : 0,
-          `${yearNum - 543 - 1}-10-01`,
-          `${yearNum - 543}-09-30`,
-        ]
-      );
-      targetId = res.insertId;
-    }
-
-    if (isActive) {
-      await conn.query('UPDATE schools SET fiscal_year = ? WHERE id = ?', [yearNum, schoolId]);
-    }
-
-    const [rows]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? ORDER BY year DESC', [schoolId]);
-    const [targetRows]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? AND id = ? LIMIT 1', [schoolId, targetId]);
-    await conn.end();
-
-    const mappedTarget = targetRows && targetRows[0] ? {
-      id: targetRows[0].id,
-      schoolId: targetRows[0].school_id,
-      year: targetRows[0].year,
-      isActive: targetRows[0].is_active === 1,
-      startDate: targetRows[0].start_date,
-      endDate: targetRows[0].end_date,
-      totalStudents: targetRows[0].total_students || 0,
-      teacherCount: targetRows[0].teacher_count || 0,
-    } : null;
-
-    const mappedAll = (rows || []).map((fy: any) => ({
-      id: fy.id,
-      schoolId: fy.school_id,
-      year: fy.year,
-      isActive: fy.is_active === 1,
-      startDate: fy.start_date,
-      endDate: fy.end_date,
-      totalStudents: fy.total_students || 0,
-      teacherCount: fy.teacher_count || 0,
-    }));
-
-    return { success: true, fiscalYear: mappedTarget, fiscalYears: mappedAll };
-  } catch (err: any) {
-    if (conn) {
-      try { await conn.end(); } catch (e) {}
-    }
-    throw err;
-  }
-}
-
-/**
- * สลับปีงบประมาณที่เปิดใช้งาน: กำหนด is_active = 1 ให้ปีที่เลือกเพียงปีเดียว และปีอื่นเป็น 0
- */
-export async function setActiveFiscalYearInDb(schoolId: number, fiscalYearId: number): Promise<any> {
-  let conn: any = null;
-  try {
-    conn = await getDirectConnection();
-    // 1. ตั้งค่าทุกปีของโรงเรียนนี้เป็น 0
-    await conn.query('UPDATE fiscal_years SET is_active = 0 WHERE school_id = ?', [schoolId]);
-    // 2. ตั้งค่าปีที่เลือกเป็น 1
-    await conn.query('UPDATE fiscal_years SET is_active = 1 WHERE school_id = ? AND id = ?', [schoolId, fiscalYearId]);
-
-    const [targetRows]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? AND id = ? LIMIT 1', [schoolId, fiscalYearId]);
-    if (targetRows && targetRows[0]) {
-      await conn.query('UPDATE schools SET fiscal_year = ? WHERE id = ?', [targetRows[0].year, schoolId]);
-    }
-
-    const [rows]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? ORDER BY year DESC', [schoolId]);
-    await conn.end();
-
-    const mappedTarget = targetRows && targetRows[0] ? {
-      id: targetRows[0].id,
-      schoolId: targetRows[0].school_id,
-      year: targetRows[0].year,
-      isActive: true,
-      startDate: targetRows[0].start_date,
-      endDate: targetRows[0].end_date,
-      totalStudents: targetRows[0].total_students || 0,
-      teacherCount: targetRows[0].teacher_count || 0,
-    } : null;
-
-    const mappedAll = (rows || []).map((fy: any) => ({
-      id: fy.id,
-      schoolId: fy.school_id,
-      year: fy.year,
-      isActive: fy.is_active === 1,
-      startDate: fy.start_date,
-      endDate: fy.end_date,
-      totalStudents: fy.total_students || 0,
-      teacherCount: fy.teacher_count || 0,
-    }));
-
-    return { success: true, activeFiscalYear: mappedTarget, fiscalYears: mappedAll };
-  } catch (err: any) {
-    if (conn) {
-      try { await conn.end(); } catch (e) {}
-    }
-    throw err;
   }
 }

@@ -156,13 +156,13 @@ export function exportProjectProposalToWordDoc(
     .map(
       (it: any, idx: number) => `
     <tr>
-      <td style="border: 1px solid #333; padding: 6px; text-align: center;">${idx + 1}</td>
-      <td style="border: 1px solid #333; padding: 6px;">${it.itemName || ''}</td>
-      <td style="border: 1px solid #333; padding: 6px; text-align: center;">${it.category || ''}</td>
-      <td style="border: 1px solid #333; padding: 6px; text-align: center;">${it.quantity || 1}</td>
-      <td style="border: 1px solid #333; padding: 6px; text-align: center;">${it.unit || 'ชุด'}</td>
-      <td style="border: 1px solid #333; padding: 6px; text-align: right;">${Number(it.unitPrice || 0).toLocaleString()}</td>
-      <td style="border: 1px solid #333; padding: 6px; text-align: right; font-weight: bold;">${Number(it.totalAmount || 0).toLocaleString()}</td>
+      <td style="border: 1px solid #333; padding: 3px; text-align: center;">${idx + 1}</td>
+      <td style="border: 1px solid #333; padding: 3px;">${it.itemName || ''}</td>
+      <td style="border: 1px solid #333; padding: 3px; text-align: center;">${it.category || ''}</td>
+      <td style="border: 1px solid #333; padding: 3px; text-align: center;">${it.quantity || 1}</td>
+      <td style="border: 1px solid #333; padding: 3px; text-align: center;">${it.unit || 'ชุด'}</td>
+      <td style="border: 1px solid #333; padding: 3px; text-align: right;">${Number(it.unitPrice || 0).toLocaleString()}</td>
+      <td style="border: 1px solid #333; padding: 3px; text-align: right; font-weight: bold;">${Number(it.totalAmount || 0).toLocaleString()}</td>
     </tr>
   `
     )
@@ -172,21 +172,21 @@ export function exportProjectProposalToWordDoc(
     .map(
       (act: any) => `
     <tr>
-      <td style="border: 1px solid #333; padding: 6px; font-weight: bold;">${act.phase || ''}</td>
-      <td style="border: 1px solid #333; padding: 6px;">${act.description || ''}</td>
-      <td style="border: 1px solid #333; padding: 6px; text-align: center;">${act.duration || ''}</td>
-      <td style="border: 1px solid #333; padding: 6px; text-align: center;">${act.responsible || ''}</td>
+      <td style="border: 1px solid #333; padding: 3px; font-weight: bold;">${act.phase || ''}</td>
+      <td style="border: 1px solid #333; padding: 3px;">${act.description || ''}</td>
+      <td style="border: 1px solid #333; padding: 3px; text-align: center;">${act.duration || ''}</td>
+      <td style="border: 1px solid #333; padding: 3px; text-align: center;">${act.responsible || ''}</td>
     </tr>
   `
     )
     .join('');
 
   const objectivesHtml = (proposal.objectives || [])
-    .map((obj: string, i: number) => `<p style="margin: 4px 0 4px 24px;">6.${i + 1} ${obj}</p>`)
+    .map((obj: string, i: number) => `<p style="margin: 4px 0 4px 24px;">5.${i + 1} ${obj}</p>`)
     .join('');
 
   const benefitsHtml = (proposal.expectedBenefits || [])
-    .map((b: string, i: number) => `<p style="margin: 4px 0 4px 24px;">12.${i + 1} ${b}</p>`)
+    .map((b: string, i: number) => `<p style="margin: 4px 0 4px 24px;">11.${i + 1} ${b}</p>`)
     .join('');
 
   const htmlContent = `
@@ -221,40 +221,39 @@ export function exportProjectProposalToWordDoc(
         h2 { font-size: 16pt; font-weight: bold; text-align: center; margin-top: 0; margin-bottom: 24px; font-family: 'TH Sarabun PSK', 'TH Sarabun New', 'Sarabun', sans-serif; }
         p { margin: 6px 0; text-align: justify; font-size: 16pt; }
         .section-title { font-weight: bold; margin-top: 14px; margin-bottom: 4px; font-size: 16pt; }
-        table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14pt; }
-        th { border: 1px solid #333; padding: 6px; background-color: #f2f2f2; text-align: center; font-weight: bold; }
-        td { border: 1px solid #333; padding: 6px; }
+        table { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 12px 0; font-size: 11pt; overflow-wrap: anywhere; }
+        th { border: 1px solid #333; padding: 3px; background-color: #f2f2f2; text-align: center; font-weight: bold; }
+        td { border: 1px solid #333; padding: 3px; }
       </style>
     </head>
     <body>
       <div class="Section1">
-        <h1>โครงการ${proposal.projectName || ''}</h1>
+        <h1>${String(proposal.projectName || '').startsWith('โครงการ') ? proposal.projectName : `โครงการ${proposal.projectName || ''}`}</h1>
         <h2>ตามแผนปฏิบัติการประจำปีงบประมาณ พ.ศ. ${fiscalYear.year}</h2>
         <h2>${school.name} (${school.educationArea || school.affiliation})</h2>
 
         <p class="section-title">1. ชื่อโครงการ: <span style="font-weight: normal;">${proposal.projectName || ''}</span></p>
-        <p class="section-title">2. รหัสโครงการ: <span style="font-weight: normal;">${proposal.projectCode || 'รอออกรหัส'}</span></p>
-        <p class="section-title">3. ลักษณะโครงการ: <span style="font-weight: normal;">โครงการ${proposal.projectType || 'ใหม่'}</span></p>
-        <p class="section-title">4. ความสอดคล้องกับยุทธศาสตร์ / นโยบาย:</p>
+        <p class="section-title">2. ลักษณะโครงการ: <span style="font-weight: normal;">โครงการ${proposal.projectType || 'ใหม่'}</span></p>
+        <p class="section-title">3. ความสอดคล้องกับยุทธศาสตร์ / นโยบาย:</p>
         <p style="margin-left: 24px;">- ${proposal.strategyAlignment || 'ยุทธศาสตร์พัฒนาคุณภาพการศึกษา สพฐ.'}</p>
         
-        <p class="section-title">5. กลุ่มงาน / ผู้รับผิดชอบโครงการ:</p>
+        <p class="section-title">กลุ่มงาน / ผู้รับผิดชอบโครงการ:</p>
         <p style="margin-left: 24px;">กลุ่มงาน/ฝ่าย: <strong>${proposal.department || ''}</strong> | ผู้รับผิดชอบ: <strong>${proposal.responsiblePerson || ''}</strong> ${proposal.position ? `(${proposal.position})` : ''}</p>
 
-        <p class="section-title">6. วัตถุประสงค์:</p>
+        <p class="section-title">5. วัตถุประสงค์:</p>
         ${objectivesHtml || '<p style="margin-left: 24px;">- เพื่อพัฒนาคุณภาพการจัดการเรียนรู้</p>'}
 
-        <p class="section-title">7. หลักการและเหตุผล:</p>
-        <p style="text-indent: 40px; margin-left: 10px;">${proposal.rationale || ''}</p>
+        <p class="section-title">4. หลักการและเหตุผล:</p>
+        ${(String(proposal.rationale || '').split(/\n\s*\n/).filter(Boolean).map((paragraph: string) => `<p style="text-indent: 40px; margin-left: 10px;">${paragraph.replace(/\n/g, '<br>')}</p>`).join(''))}
 
-        <p class="section-title">8. เป้าหมาย:</p>
-        <p style="margin-left: 24px;"><strong>8.1 เป้าหมายเชิงปริมาณ:</strong> ${proposal.quantitativeTarget || ''}</p>
-        <p style="margin-left: 24px;"><strong>8.2 เป้าหมายเชิงคุณภาพ:</strong> ${proposal.qualitativeTarget || ''}</p>
+        <p class="section-title">6. เป้าหมาย:</p>
+        <p style="margin-left: 24px;"><strong>6.1 เป้าหมายเชิงปริมาณ:</strong> ${proposal.quantitativeTarget || ''}</p>
+        <p style="margin-left: 24px;"><strong>6.2 เป้าหมายเชิงคุณภาพ:</strong> ${proposal.qualitativeTarget || ''}</p>
 
-        <p class="section-title">9. สถานที่และระยะเวลาดำเนินการ:</p>
+        <p class="section-title">7. สถานที่และระยะเวลาดำเนินการ:</p>
         <p style="margin-left: 24px;">สถานที่: ${proposal.location || 'โรงเรียน'} | ระยะเวลา: ${proposal.timeline || 'ตลอดปีการศึกษา'}</p>
 
-        <p class="section-title">10. ขั้นตอนและปฏิทินการดำเนินงาน (PDCA):</p>
+        <p class="section-title">8. ขั้นตอนและปฏิทินการดำเนินงาน (PDCA):</p>
         <table>
           <thead>
             <tr>
@@ -269,7 +268,7 @@ export function exportProjectProposalToWordDoc(
           </tbody>
         </table>
 
-        <p class="section-title">11. งบประมาณและรายละเอียดค่าใช้จ่าย:</p>
+        <p class="section-title">9. งบประมาณและรายละเอียดค่าใช้จ่าย:</p>
         <p style="margin-left: 10px;">งบประมาณรวมทั้งสิ้น <strong>${Number(proposal.totalBudget || 0).toLocaleString()} บาท</strong> จากแหล่งงบประมาณ: ${proposal.budgetSource || 'เงินอุดหนุน สพฐ.'}</p>
         <table>
           <thead>
@@ -286,29 +285,31 @@ export function exportProjectProposalToWordDoc(
           <tbody>
             ${expenseRowsHtml}
             <tr style="font-weight: bold; background-color: #f9f9f9;">
-              <td colspan="6" style="border: 1px solid #333; padding: 6px; text-align: right;">รวมงบประมาณทั้งสิ้น</td>
-              <td style="border: 1px solid #333; padding: 6px; text-align: right;">${Number(proposal.totalBudget || 0).toLocaleString()}</td>
+              <td colspan="6" style="border: 1px solid #333; padding: 3px; text-align: right;">รวมงบประมาณทั้งสิ้น</td>
+              <td style="border: 1px solid #333; padding: 3px; text-align: right;">${Number(proposal.totalBudget || 0).toLocaleString()}</td>
             </tr>
           </tbody>
         </table>
 
-        <p class="section-title">12. ผลที่คาดว่าจะได้รับ:</p>
-        ${benefitsHtml}
-
-        <p class="section-title">13. การประเมินผลและตัวชี้วัดความสำเร็จ:</p>
+        <p class="section-title">10. การประเมินผลและตัวชี้วัดความสำเร็จ:</p>
         <p style="margin-left: 24px;"><strong>ตัวชี้วัด (KPI):</strong> ${proposal.kpis || ''}</p>
         <p style="margin-left: 24px;"><strong>วิธีการและเครื่องมือประเมิน:</strong> ${proposal.evaluationMethods || ''}</p>
+
+        <p class="section-title">11. ผลที่คาดว่าจะได้รับ:</p>
+        ${benefitsHtml}
 
         <table style="width: 100%; border: none; margin-top: 40px; page-break-inside: avoid;">
           <tr style="border: none;">
             <td style="width: 50%; border: none; text-align: center; vertical-align: top; padding: 10px;">
-              <p>(ลงชื่อ).......................................................... ผู้เสนอโครงการ</p>
+              <p style="font-weight: bold; text-align: center;">ผู้เสนอโครงการ</p>
+              <p style="margin-top: 14px;">ลงชื่อ..........................................................</p>
               <p>(${proposal.proposerName || proposal.responsiblePerson || '..........................................................'})</p>
               <p>ตำแหน่ง ${proposal.proposerPosition || proposal.position || 'ครูผู้รับผิดชอบโครงการ'}</p>
               <p>วันที่ ..... เดือน .................... พ.ศ. .........</p>
             </td>
             <td style="width: 50%; border: none; text-align: center; vertical-align: top; padding: 10px;">
-              <p>(ลงชื่อ).......................................................... ผู้เห็นชอบโครงการ</p>
+              <p style="font-weight: bold; text-align: center;">ผู้เห็นชอบโครงการ</p>
+              <p style="margin-top: 14px;">ลงชื่อ..........................................................</p>
               <p>(${proposal.endorserName || '..........................................................'})</p>
               <p>ตำแหน่ง ${proposal.endorserPosition || `หัวหน้ากลุ่มงาน${proposal.department || ''}`}</p>
               <p>วันที่ ..... เดือน .................... พ.ศ. .........</p>
@@ -487,4 +488,3 @@ export function exportProjectExpenseRecordToWordDoc(
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
-

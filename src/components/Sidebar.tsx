@@ -78,9 +78,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'budget', label: '5. จัดสรรงบประมาณ', icon: PieChart },
     { id: 'learner_activities', label: '6. กิจกรรมพัฒนาผู้เรียน', icon: Sparkles },
     { id: 'ai_project_writer', label: '7. เขียนโครงการด้วย AI', icon: Bot, badge: 'AI สพฐ.' },
-    { id: 'projects', label: '8. แบบเสนอโครงการ', icon: FolderGit2, badge: pendingCount > 0 ? `${pendingCount} รออนุมัติ` : undefined },
-    { id: 'approved_projects', label: '8.1 โครงการที่อนุมัติแล้ว', icon: CheckCircle2, badge: approvedCount > 0 ? `${approvedCount}` : undefined },
-    { id: 'budget_cut', label: '8.2 ตัดแผนงบประมาณ', icon: Scissors, badge: 'ปรับลด-เพิ่ม' },
+    { id: 'projects', label: '8. โครงการเสนอและอนุมัติ', icon: FolderGit2, badge: pendingCount > 0 ? `${pendingCount} รออนุมัติ` : undefined },
+    { id: 'budget_cut', label: '8.1 ตัดแผนงบประมาณ', icon: Scissors, badge: 'ปรับลด-เพิ่ม' },
     { id: 'expenses', label: '9. รายละเอียดงบโครงการ', icon: FileSpreadsheet },
     { id: 'disbursements', label: '10. การเบิกจ่าย / การใช้เงิน', icon: Receipt },
     { id: 'action_plan', label: '11. แผนปฏิบัติการประจำปี', icon: Target },
@@ -187,7 +186,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <Sheet className="h-4 w-4 shrink-0 text-emerald-400" />
                 <div className="flex-1">
                   <div>Google Apps Script (Code.gs)</div>
-                  <div className="text-[10px] text-emerald-400/80 font-normal">Google Sheets & Gemini AI</div>
+                  <div className="text-[10px] text-emerald-400/80 font-normal">Sheets, Gemini และภาพโครงการ</div>
                 </div>
               </button>
             )}

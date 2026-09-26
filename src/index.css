@@ -51,7 +51,12 @@
   }
   @page {
     size: A4 portrait;
-    margin: 2.5cm 2cm 2cm 2.5cm;
+    margin: 15mm 8mm;
+  }
+
+  #official-project-proposal-sheet, #official-project-proposal-sheet * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
   .printable-proposal, #official-project-proposal-sheet, #official-project-expense-sheet, #proposal-document {
@@ -62,9 +67,15 @@
     max-width: 100% !important;
     width: 100% !important;
     font-family: 'Sarabun', 'TH Sarabun New', 'TH Sarabun PSK', sans-serif !important;
-    font-size: 16pt !important;
-    line-height: 1.5 !important;
+    font-size: 11pt !important;
+    line-height: 1.45 !important;
     color: #000000 !important;
+  }
+  #official-project-proposal-sheet {
+    box-sizing: border-box !important;
+    padding: 5mm !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 6px !important;
   }
 
   .printable-proposal h1, .printable-proposal h2, .printable-proposal h3,
@@ -76,7 +87,9 @@
   }
 
   .printable-proposal table, #official-project-proposal-sheet table, #official-project-expense-sheet table, #proposal-document table {
-    font-size: 14pt !important;
+    width: 100% !important;
+    table-layout: fixed !important;
+    font-size: 9pt !important;
     border-color: #000000 !important;
   }
   .printable-proposal th, #official-project-proposal-sheet th, #official-project-expense-sheet th, #proposal-document th {
@@ -86,5 +99,41 @@
   .printable-proposal td, #official-project-proposal-sheet td, #official-project-expense-sheet td, #proposal-document td {
     border-color: #000000 !important;
   }
+  #official-project-proposal-sheet th, #official-project-proposal-sheet td {
+    padding: 3px !important;
+    overflow-wrap: anywhere !important;
+    word-break: normal !important;
+    vertical-align: top !important;
+  }
+  #official-project-proposal-sheet tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  #proposal-activity-table th:nth-child(1) { width: 19% !important; }
+  #proposal-activity-table th:nth-child(2) { width: 42% !important; }
+  #proposal-activity-table th:nth-child(3) { width: 17% !important; }
+  #proposal-activity-table th:nth-child(4) { width: 22% !important; }
+  #proposal-expense-table th:nth-child(1) { width: 5% !important; }
+  #proposal-expense-table th:nth-child(2) { width: 34% !important; }
+  #proposal-expense-table th:nth-child(3) { width: 13% !important; }
+  #proposal-expense-table th:nth-child(4) { width: 8% !important; }
+  #proposal-expense-table th:nth-child(5) { width: 8% !important; }
+  #proposal-expense-table th:nth-child(6) { width: 16% !important; }
+  #proposal-expense-table th:nth-child(7) { width: 16% !important; }
+  #official-project-proposal-sheet p, #official-project-proposal-sheet li {
+    overflow-wrap: anywhere;
+  }
 }
 
+@media print {
+  body.printing-project-report #root * { visibility: hidden !important; }
+  body.printing-project-report #project-report-print,
+  body.printing-project-report #project-report-print * { visibility: visible !important; }
+  body.printing-project-report #project-report-print { position: absolute; inset: 0 auto auto 0; width: 100%; box-shadow: none; }
+}
+
+@media print {
+  body.printing-project-report .project-photo-appendix { break-before: page; page-break-before: always; }
+  body.printing-project-report .project-photo-appendix figure { break-inside: avoid; page-break-inside: avoid; }
+  body.printing-project-report .project-photo-appendix img { height: 78mm; object-fit: contain; }
+}

@@ -12,9 +12,11 @@ import {
   DollarSign,
   Download,
   Filter,
-  FileText
+  FileText,
+  FolderOpen
 } from 'lucide-react';
 import { exportToExcel } from '../utils/exportUtils';
+import { canAccessProject } from '../utils/projectAccess';
 
 interface DisbursementsViewProps {
   transactions: BudgetTransaction[];
@@ -31,6 +33,8 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
   activeFiscalYear,
   onUpdateTransactions,
 }) => {
+  const visibleProjects = projects.filter(p => !!p.approvedBy && canAccessProject(p, currentUser));
+  const visibleIds = new Set(visibleProjects.map(p => p.id));
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedProjectFilter, setSelectedProjectFilter] = useState('all');
 
@@ -39,7 +43,7 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
   const [overBudgetWarning, setOverBudgetWarning] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
-    projectId: projects[0]?.id || 1,
+    projectId: visibleProjects[0]?.id || 0,
     transactionDate: new Date().toISOString().split('T')[0],
     itemDescription: '',
     amount: 5000,
@@ -49,11 +53,12 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
   });
 
   // Selected project for new transaction
-  const targetProject = projects.find((p) => p.id === formData.projectId);
+  const targetProject = visibleProjects.find((p) => p.id === formData.projectId) || visibleProjects[0];
   const currentRemaining = targetProject ? targetProject.remainingBudget : 0;
 
   // Filtered transactions
   const filtered = transactions.filter((t) => {
+    if (!visibleIds.has(t.projectId)) return false;
     const matchSearch =
       t.docNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
       t.itemDescription.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -76,7 +81,7 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
   };
 
   const handleProjectSelect = (projId: number) => {
-    const proj = projects.find((p) => p.id === projId);
+    const proj = visibleProjects.find((p) => p.id === projId);
     setFormData((prev) => ({ ...prev, projectId: projId }));
     if (proj && formData.amount > proj.remainingBudget) {
       setOverBudgetWarning(
@@ -89,24 +94,23 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!targetProject) return;
+    if (!targetProject || !visibleIds.has(targetProject.id)) { alert('กรุณาเลือกโครงการที่รับผิดชอบและได้รับอนุมัติแล้ว'); return; }
 
     if (formData.amount <= 0) {
       alert('กรุณาระบุจำนวนเงินที่ถูกต้อง');
       return;
     }
 
-    // Over-budget alert check
+    // Respect the approved budget cap.
     if (formData.amount > targetProject.remainingBudget) {
-      if (!confirm(`⚠️ คำเตือนการเบิกจ่ายเกินงบประมาณ (Over-budget Alert)!\n\nโครงการ: ${targetProject.projectName}\nงบประมาณคงเหลือ: ${targetProject.remainingBudget.toLocaleString()} บาท\nจำนวนเงินที่ขอเบิก: ${formData.amount.toLocaleString()} บาท\n(เกินงบ ${ (formData.amount - targetProject.remainingBudget).toLocaleString() } บาท)\n\nคุณยังต้องการยืนยันบันทึกการเบิกจ่ายนี้หรือไม่?`)) {
-        return;
-      }
+      alert('ยอดเบิกจ่ายเกินงบประมาณคงเหลือของโครงการ กรุณาปรับยอดก่อนบันทึก');
+      return;
     }
 
     const newId = transactions.length > 0 ? Math.max(...transactions.map((t) => t.id)) + 1 : 1;
     const newTrans: BudgetTransaction = {
       id: newId,
-      schoolId: 1,
+      schoolId: targetProject.schoolId,
       fiscalYearId: activeFiscalYear.id,
       projectId: targetProject.id,
       transactionDate: formData.transactionDate,
@@ -138,7 +142,7 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
     setIsFormOpen(false);
     setOverBudgetWarning(null);
     setFormData({
-      projectId: projects[0]?.id || 1,
+      projectId: visibleProjects[0]?.id || 0,
       transactionDate: new Date().toISOString().split('T')[0],
       itemDescription: '',
       amount: 5000,
@@ -150,7 +154,7 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
 
   const handleDeleteTransaction = (transId: number) => {
     const target = transactions.find((t) => t.id === transId);
-    if (!target) return;
+    if (!target || !visibleIds.has(target.projectId)) return;
 
     if (confirm(`ต้องการยกเลิกใบเบิกจ่าย ${target.docNumber} จำนวน ${target.amount.toLocaleString()} บาท ใช่หรือไม่?`)) {
       const updatedTransactions = transactions.filter((t) => t.id !== transId);
@@ -217,7 +221,8 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
           <button
             id="btn-open-disbursement-form"
             type="button"
-            onClick={() => setIsFormOpen(true)}
+            onClick={() => { if (visibleProjects.length) { setFormData(prev => ({ ...prev, projectId: visibleProjects.some(p => p.id === prev.projectId) ? prev.projectId : visibleProjects[0].id })); setIsFormOpen(true); } }}
+            disabled={visibleProjects.length === 0}
             className="flex items-center gap-1.5 rounded-lg bg-blue-700 hover:bg-blue-800 px-4 py-2 text-xs font-semibold text-white shadow-sm transition-colors"
           >
             <Plus className="h-4 w-4" />
@@ -225,6 +230,22 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
           </button>
         </div>
       </div>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h3 className="mb-3 text-sm font-bold text-slate-900">โครงการที่ติดตามการใช้เงินได้ ({visibleProjects.length})</h3>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {visibleProjects.map(p => <div key={p.id}
+            className={`rounded-xl border p-3 text-left ${selectedProjectFilter === String(p.id) ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}>
+            <span className="flex items-center gap-2 text-sm font-bold text-slate-900"><FolderOpen className="h-4 w-4 shrink-0 text-blue-700" />{p.projectName}</span>
+            <span className="mt-1 block text-xs text-slate-600">ใช้แล้ว {p.spentBudget.toLocaleString()} / {p.allocatedBudget.toLocaleString()} บาท</span>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" onClick={() => setSelectedProjectFilter(String(p.id))} className="rounded-lg border border-blue-300 px-2.5 py-1 text-xs font-semibold text-blue-800">ดูรายการ</button>
+              <button type="button" onClick={() => { setFormData(prev => ({ ...prev, projectId: p.id })); setIsFormOpen(true); }} className="rounded-lg bg-blue-700 px-2.5 py-1 text-xs font-semibold text-white">บันทึกการเบิกจ่าย</button>
+            </div>
+          </div>)}
+          {visibleProjects.length === 0 && <p className="text-sm text-slate-600">ยังไม่มีโครงการที่รับผิดชอบและได้รับอนุมัติ</p>}
+        </div>
+      </section>
 
       {/* Filter and Search Bar */}
       <div className="flex flex-col md:flex-row items-center justify-between gap-3 bg-white p-3 rounded-xl border border-slate-200 shadow-xs">
@@ -250,7 +271,7 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
             className="text-xs rounded-lg border border-slate-300 bg-white py-1.5 px-2 focus:outline-none max-w-xs truncate"
           >
             <option value="all">ทุกโครงการ</option>
-            {projects.map((p) => (
+            {visibleProjects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.projectCode} - {p.projectName}
               </option>
@@ -285,7 +306,7 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
                 </tr>
               ) : (
                 filtered.map((t, idx) => {
-                  const proj = projects.find((p) => p.id === t.projectId);
+                  const proj = visibleProjects.find((p) => p.id === t.projectId);
                   return (
                     <tr key={t.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-2.5 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
@@ -373,7 +394,7 @@ export const DisbursementsView: React.FC<DisbursementsViewProps> = ({
                   onChange={(e) => handleProjectSelect(Number(e.target.value))}
                   className="w-full rounded-lg border border-slate-300 p-2 text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 >
-                  {projects.map((p) => (
+                  {visibleProjects.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.projectCode} - {p.projectName} (งบคงเหลือ: {p.remainingBudget.toLocaleString()} บ.)
                     </option>

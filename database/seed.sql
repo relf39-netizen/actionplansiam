@@ -8,8 +8,9 @@
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- ข้อมูลผู้ดูแลระบบส่วนกลาง (Super Admin)
-INSERT IGNORE INTO `super_admins` (`id`, `username`, `password_hash`, `full_name`, `email`) VALUES
-(1, 'peyarm', '1-6', 'ผู้ดูแลระบบส่วนกลาง (Super Admin)', 'peyarm@obec.mail.go.th');
+INSERT INTO `super_admins` (`id`, `username`, `password_hash`, `full_name`, `email`) VALUES
+(1, 'peyarm', '1-6', 'ผู้ดูแลระบบส่วนกลาง (Super Admin)', 'peyarm@obec.mail.go.th')
+ON DUPLICATE KEY UPDATE username = VALUES(username);
 
 -- ข้อมูลโรงเรียน
 INSERT INTO `schools` (`id`, `school_code`, `name`, `address`, `subdistrict`, `district`, `province`, `zipcode`, `affiliation`, `education_area`, `fiscal_year`, `director_name`, `phone`, `email`, `logo_url`) VALUES

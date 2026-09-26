@@ -1,3 +1,4 @@
+import { ProjectWorkflow } from './ProjectWorkflow';
 import React, { useState, useMemo } from 'react';
 import { Project, BudgetAllocation, FiscalYear, User, School } from '../types';
 import {
@@ -46,26 +47,29 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
   onUpdateAllocations,
   onNavigateToProjectExpenses,
 }) => {
-  // Filter allocations to only regular departments and contingency
+  // Reserves are held before allocation and are not project departments.
   const departments = useMemo(() => {
-    return allocations.filter((a) => !a.isContingency);
+    return allocations.filter((a) => !a.isContingency && !a.reserveType);
   }, [allocations]);
 
   // Active department tab
   const [selectedDeptId, setSelectedDeptId] = useState<number>(() => {
-    return departments[0]?.id || allocations[0]?.id || 1;
+    return departments[0]?.id || 1;
   });
 
   // Current active department object
   const activeDepartment = useMemo(() => {
-    return allocations.find((a) => a.id === selectedDeptId) || allocations[0];
-  }, [allocations, selectedDeptId]);
+    return departments.find((a) => a.id === selectedDeptId) || departments[0];
+  }, [departments, selectedDeptId]);
+
+  const departmentKey = (name: string) => name.trim().toLowerCase().replace(/^(ฝ่าย|กลุ่ม)(บริหารงาน|งาน)?/, '').replace(/^บริหารงาน/, '');
+  const matchesDepartment = (project: Project, dept: BudgetAllocation) => departmentKey(project.department) === departmentKey(dept.departmentName);
 
   // Projects in currently selected department
   const departmentProjects = useMemo(() => {
     if (!activeDepartment) return [];
     return projects.filter(
-      (p) => p.department.trim().toLowerCase() === activeDepartment.departmentName.trim().toLowerCase()
+      (p) => matchesDepartment(p, activeDepartment)
     );
   }, [projects, activeDepartment]);
 
@@ -82,6 +86,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
 
   // Get current draft amount or fallback to allocatedBudget
   const getProjectDraftBudget = (p: Project): number => {
+    if (p.approvedBy) return p.allocatedBudget;
     if (draftBudgets[p.id] !== undefined) {
       return draftBudgets[p.id];
     }
@@ -98,9 +103,9 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
   // Check if department is already confirmed
   const isDeptConfirmed = (dept: BudgetAllocation): boolean => {
     // A department is confirmed if it has flag or all its projects have isBudgetCutConfirmed
-    if (dept.isCutConfirmed) return true;
+    // Newly submitted projects reopen cutting even if this group was confirmed earlier.
     const deptProjs = projects.filter(
-      (p) => p.department.trim().toLowerCase() === dept.departmentName.trim().toLowerCase()
+      (p) => matchesDepartment(p, dept)
     );
     if (deptProjs.length > 0 && deptProjs.every((p) => p.isBudgetCutConfirmed)) {
       return true;
@@ -138,6 +143,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
 
   // Handle single project budget change
   const handleBudgetChange = (projectId: number, valueStr: string) => {
+    if (departmentProjects.find(p => p.id === projectId)?.approvedBy) return;
     const val = parseFloat(valueStr);
     const newAmount = isNaN(val) ? 0 : Math.max(0, val);
     setDraftBudgets((prev) => ({
@@ -149,7 +155,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
   // Quick adjust project by delta (+5000, -5000, etc.)
   const handleQuickAdjust = (projectId: number, delta: number) => {
     const project = departmentProjects.find((p) => p.id === projectId);
-    if (!project) return;
+    if (!project || project.approvedBy) return;
     const current = getProjectDraftBudget(project);
     const updated = Math.max(0, current + delta);
     setDraftBudgets((prev) => ({
@@ -174,7 +180,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
     const newDrafts: Record<number, number> = { ...draftBudgets };
     const newNotes: Record<number, string> = { ...draftNotes };
 
-    departmentProjects.forEach((p) => {
+    departmentProjects.filter(p => !p.approvedBy).forEach((p) => {
       const orig = p.originalProposedBudget !== undefined ? p.originalProposedBudget : p.allocatedBudget;
       newDrafts[p.id] = orig;
       newNotes[p.id] = 'คืนค่างบประมาณตามวงเงินเดิมที่เสนอขอ';
@@ -202,15 +208,20 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
       return;
     }
 
-    const ratio = totalAllocated / totalCurrentDraft;
+    const fixedBudget = departmentProjects.filter(p => p.approvedBy).reduce((sum, p) => sum + p.allocatedBudget, 0);
+    const editableBudget = departmentProjects.filter(p => !p.approvedBy).reduce((sum, p) => sum + getProjectDraftBudget(p), 0);
+    if (fixedBudget > totalAllocated || editableBudget <= 0) { alert('ไม่มีวงเงินเหลือให้เกลี่ยโครงการ'); return; }
+    const ratio = (totalAllocated - fixedBudget) / editableBudget;
     const newDrafts: Record<number, number> = { ...draftBudgets };
     const newNotes: Record<number, string> = { ...draftNotes };
 
     let runningSum = 0;
-    departmentProjects.forEach((p, idx) => {
-      if (idx === departmentProjects.length - 1) {
+    const editableProjects = departmentProjects.filter(p => !p.approvedBy);
+    const fixedAmount = departmentProjects.filter(p => p.approvedBy).reduce((sum, p) => sum + p.allocatedBudget, 0);
+    editableProjects.forEach((p, idx) => {
+      if (idx === editableProjects.length - 1) {
         // Last item absorbs rounding difference to make it 100% exact
-        const remainder = Math.max(0, totalAllocated - runningSum);
+        const remainder = Math.max(0, totalAllocated - fixedAmount - runningSum);
         newDrafts[p.id] = remainder;
       } else {
         const currentAmount = getProjectDraftBudget(p);
@@ -232,10 +243,8 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
     if (!activeDepartment) return;
 
     if (isOverBudget) {
-      const confirmProceed = window.confirm(
-        `คำเตือน: ยอดรวมโครงการยังเกินงบประมาณที่กลุ่มงานได้รับการจัดสรรอยู่ ${netDiff.toLocaleString()} บาท คุณต้องการยืนยันการตัดแผนตามยอดนี้จริงหรือไม่?`
-      );
-      if (!confirmProceed) return;
+      alert(`ยอดรวมโครงการเกินกรอบกลุ่มงาน ${netDiff.toLocaleString()} บาท กรุณาปรับลดก่อนยืนยัน`);
+      return;
     }
 
     const now = new Date();
@@ -248,7 +257,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
 
     // 1. Update projects in this department
     const updatedProjects = projects.map((p) => {
-      if (p.department.trim().toLowerCase() === activeDepartment.departmentName.trim().toLowerCase()) {
+      if (matchesDepartment(p, activeDepartment) && !p.approvedBy) {
         const newBudget = getProjectDraftBudget(p);
         const originalProposed =
           p.originalProposedBudget !== undefined ? p.originalProposedBudget : p.allocatedBudget;
@@ -256,6 +265,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
 
         return {
           ...p,
+          department: activeDepartment.departmentName,
           originalProposedBudget: originalProposed,
           allocatedBudget: newBudget,
           remainingBudget: Math.max(0, newBudget - p.spentBudget),
@@ -315,23 +325,22 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Top Banner / Header */}
-      <div className="no-print flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 p-6 rounded-2xl text-white shadow-xl">
+      <div className="no-print flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-slate-200 p-5 rounded-2xl text-slate-900 shadow-sm">
         <div>
           <div className="flex items-center gap-2 mb-2">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
               <Scissors className="w-3.5 h-3.5" />
               ระบบตัดแผนงบประมาณตามกลุ่มงาน
             </span>
-            <span className="text-xs text-blue-200">
+            <span className="text-xs text-slate-500">
               ปีงบประมาณ พ.ศ. {activeFiscalYear.year}
             </span>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+          <h1 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
             ตัดแผนงบประมาณโครงการรายกลุ่มงาน
           </h1>
-          <p className="text-sm text-blue-100/90 mt-1 max-w-3xl leading-relaxed">
-            บริหารจัดการตัดทอน ปรับลด หรือเพิ่มงบประมาณของโครงการที่ครูเสนอมาในแต่ละกลุ่มงาน
-            ให้สอดคล้องตรงกับยอดงบประมาณที่กลุ่มงานได้รับการจัดสรรอย่างมีประสิทธิภาพและโปร่งใส
+          <p className="text-sm text-slate-600 mt-1 max-w-3xl leading-relaxed">
+            เลือกกลุ่มงาน → ปรับวงเงินแต่ละโครงการ → ตรวจยอดรวมไม่ให้เกินกรอบ → ยืนยันเพื่อนำไปพิจารณาอนุมัติ
           </p>
         </div>
 
@@ -340,13 +349,15 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
             id="btn-print-budget-cut-summary"
             type="button"
             onClick={handlePrintSummary}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold backdrop-blur-xs border border-white/20 transition-all shadow-sm cursor-pointer"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-300 transition-all shadow-sm cursor-pointer"
           >
-            <Printer className="w-4 h-4 text-blue-200" />
+            <Printer className="w-4 h-4 text-blue-700" />
             <span>พิมพ์แบบสรุปตัดแผน</span>
           </button>
         </div>
       </div>
+
+      <ProjectWorkflow active={2} />
 
       {/* Success Notification Alert */}
       {saveSuccessMsg && (
@@ -365,13 +376,13 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
       )}
 
       {/* Department Tabs Bar (แถบแต่ละกลุ่มงาน) */}
-      <div className="no-print bg-white p-2 rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
-        <div className="flex items-center gap-2 min-w-max">
-          {allocations.map((dept) => {
+      <div className="no-print bg-white p-3 rounded-2xl shadow-sm border border-slate-200">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {departments.map((dept) => {
             const isSelected = dept.id === selectedDeptId;
             const confirmed = isDeptConfirmed(dept);
             const deptProjList = projects.filter(
-              (p) => p.department.trim().toLowerCase() === dept.departmentName.trim().toLowerCase()
+              (p) => matchesDepartment(p, dept)
             );
             const deptProposedSum = deptProjList.reduce((sum, p) => {
               const b = draftBudgets[p.id] !== undefined ? draftBudgets[p.id] : p.allocatedBudget;
@@ -388,7 +399,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
                   setSelectedDeptId(dept.id);
                   setSaveSuccessMsg('');
                 }}
-                className={`flex items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                className={`flex min-w-0 w-full items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   isSelected
                     ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25 ring-2 ring-blue-600/30'
                     : 'bg-slate-50 text-slate-700 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/80'
@@ -398,9 +409,9 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
                   className="w-2.5 h-2.5 rounded-full shrink-0"
                   style={{ backgroundColor: dept.colorHex || '#3b82f6' }}
                 />
-                <div className="text-left">
-                  <div className="flex items-center gap-1.5">
-                    <span>{dept.departmentName}</span>
+                <div className="min-w-0 flex-1 text-left">
+                  <div className="flex items-start gap-1.5">
+                    <span className="break-words">{dept.departmentName}</span>
                     {confirmed && (
                       <CheckCircle2
                         className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-emerald-200' : 'text-emerald-600'}`}
@@ -414,7 +425,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
 
                 {confirmed ? (
                   <span
-                    className={`ml-1 text-[9px] px-1.5 py-0.5 rounded-md font-semibold ${
+                    className={`ml-1 shrink-0 text-[9px] px-1.5 py-0.5 rounded-md font-semibold ${
                       isSelected
                         ? 'bg-emerald-400/30 text-emerald-100 border border-emerald-300/40'
                         : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
@@ -424,7 +435,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
                   </span>
                 ) : diff > 0 ? (
                   <span
-                    className={`ml-1 text-[9px] px-1.5 py-0.5 rounded-md font-bold ${
+                    className={`ml-1 shrink-0 text-[9px] px-1.5 py-0.5 rounded-md font-bold ${
                       isSelected
                         ? 'bg-rose-400/30 text-rose-100 border border-rose-300/40'
                         : 'bg-rose-100 text-rose-700 border border-rose-200'
@@ -434,7 +445,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
                   </span>
                 ) : (
                   <span
-                    className={`ml-1 text-[9px] px-1.5 py-0.5 rounded-md font-semibold ${
+                    className={`ml-1 shrink-0 text-[9px] px-1.5 py-0.5 rounded-md font-semibold ${
                       isSelected
                         ? 'bg-blue-400/30 text-blue-100'
                         : 'bg-slate-200 text-slate-600'
@@ -801,7 +812,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
 
                       {/* 4. ปรับลด / เพิ่มงบประมาณ */}
                       <td className="py-3.5 px-4">
-                        {canEditCurrentDept ? (
+                        {canEditCurrentDept && !project.approvedBy ? (
                           <div className="space-y-1.5 max-w-[240px] mx-auto">
                             {/* Input Field */}
                             <div className="relative">
@@ -893,7 +904,7 @@ export const BudgetCutView: React.FC<BudgetCutViewProps> = ({
 
                       {/* 6. บันทึกเหตุผลการตัดงบ */}
                       <td className="py-3.5 px-4">
-                        {canEditCurrentDept ? (
+                        {canEditCurrentDept && !project.approvedBy ? (
                           <input
                             id={`input-note-${project.id}`}
                             type="text"
