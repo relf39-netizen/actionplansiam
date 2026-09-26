@@ -1491,37 +1491,37 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                               </td>
                               <td className="py-3 px-3 text-center">
                                 <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                                  {u.status === 'pending' && (
+                                  {u.status === 'pending' ? (
                                     <button
                                       type="button"
                                       onClick={() => handleApproveTeacher(u.id, 'teacher')}
                                       className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
-                                      title="อนุมัติการใช้งานเป็นคุณครูปกติ"
+                                      title="อนุมัติการใช้งานเป็นคุณครูของโรงเรียน"
                                     >
                                       <Check className="w-3.5 h-3.5" />
                                       <span>อนุมัติครู</span>
                                     </button>
-                                  )}
-
-                                  {u.role !== 'admin' ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSetSchoolAdmin(u)}
-                                      className="px-2.5 py-1.5 rounded-xl bg-blue-900 hover:bg-blue-800 text-amber-300 font-bold text-xs flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
-                                      title="แต่งตั้งเป็นแอดมินของโรงเรียนนี้"
-                                    >
-                                      <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                                      <span>ตั้งเป็น Admin</span>
-                                    </button>
                                   ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleApproveTeacher(u.id, 'teacher')}
-                                      className="px-2 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-[11px] cursor-pointer transition-colors"
-                                      title="เปลี่ยนเป็นสิทธิ์ครูปกติ"
-                                    >
-                                      <span>สลับเป็นครูปกติ</span>
-                                    </button>
+                                    u.role !== 'admin' ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSetSchoolAdmin(u)}
+                                        className="px-2.5 py-1.5 rounded-xl bg-blue-900 hover:bg-blue-800 text-amber-300 font-bold text-xs flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
+                                        title="แต่งตั้งเป็นแอดมินของโรงเรียนนี้"
+                                      >
+                                        <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                                        <span>ตั้งเป็น Admin</span>
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleApproveTeacher(u.id, 'teacher')}
+                                        className="px-2 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-[11px] cursor-pointer transition-colors"
+                                        title="เปลี่ยนเป็นสิทธิ์ครูปกติ"
+                                      >
+                                        <span>สลับเป็นครูปกติ</span>
+                                      </button>
+                                    )
                                   )}
 
                                   <button

@@ -222,21 +222,37 @@ export default function App() {
   // Count approved active projects
   const approvedProjectsCount = projects.filter((p) => p.approvedBy && p.status !== 'completed').length;
 
-  // Sync revenue amounts when students change
+  // Sync revenue amounts when students change across stages
   const handleUpdateStudents = (updatedList: StudentLevel[]) => {
     setStudents(updatedList);
-    const newTotal = updatedList.reduce((sum, s) => sum + s.totalCount, 0);
+    const newTotal = updatedList.reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
 
-    // Auto-sync eligible count on head-count dependent revenue items
+    const kinderTotal = updatedList.filter((s) => s.stage === 'อนุบาล').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+    const primaryTotal = updatedList.filter((s) => s.stage === 'ประถม').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+    const secLowerTotal = updatedList.filter((s) => s.stage === 'มัธยมต้น').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+    const secUpperTotal = updatedList.filter((s) => s.stage === 'มัธยมปลาย').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+
+    // Auto-sync eligible count on stage-dependent or head-count dependent revenue items
     const updatedRevenues = revenues.map((r) => {
-      if (!r.isCustomRate && (r.itemName.includes('นักเรียน') || r.id <= 6 || r.id === 8)) {
-        return {
-          ...r,
-          eligibleCount: newTotal,
-          calculatedAmount: Math.round(r.ratePerHead * newTotal),
-        };
+      if (r.isCustomRate) return r;
+      let targetCount = r.eligibleCount;
+      if (r.itemName.includes('อนุบาล')) {
+        targetCount = kinderTotal;
+      } else if (r.itemName.includes('ประถม')) {
+        targetCount = primaryTotal;
+      } else if (r.itemName.includes('มัธยมต้น') || r.itemName.includes('มัธยมศึกษาตอนต้น')) {
+        targetCount = secLowerTotal;
+      } else if (r.itemName.includes('มัธยมปลาย') || r.itemName.includes('มัธยมศึกษาตอนปลาย')) {
+        targetCount = secUpperTotal;
+      } else if (r.itemName.includes('นักเรียน') || r.category === 'welfare') {
+        targetCount = newTotal;
       }
-      return r;
+
+      return {
+        ...r,
+        eligibleCount: targetCount,
+        calculatedAmount: Math.round((Number(r.ratePerHead) || 0) * targetCount),
+      };
     });
 
     setRevenues(updatedRevenues);
@@ -460,6 +476,7 @@ export default function App() {
               <StudentDataView
                 students={students}
                 activeFiscalYear={activeFiscalYear}
+                school={school}
                 onUpdateStudents={handleUpdateStudents}
                 onUpdateFiscalYear={handleUpdateFiscalYear}
               />
@@ -470,6 +487,7 @@ export default function App() {
                 revenues={revenues}
                 activeFiscalYear={activeFiscalYear}
                 totalStudents={totalStudents}
+                students={students}
                 onUpdateRevenues={handleUpdateRevenues}
               />
             )}

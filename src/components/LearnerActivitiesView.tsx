@@ -18,9 +18,11 @@ export const LearnerActivitiesView: React.FC<LearnerActivitiesViewProps> = ({
   const [list, setList] = useState<LearnerActivity[]>([...activities]);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
-  // Find the revenue item for learner activities
-  const learnerRev = revenues.find((r) => r.itemName.includes('กิจกรรมพัฒนาผู้เรียน'));
-  const defaultTotal = learnerRev ? learnerRev.calculatedAmount : 110000;
+  // Find the revenue items for learner activities across all stages
+  const learnerRevTotal = revenues
+    .filter((r) => r.category === 'activity' || r.itemName.includes('กิจกรรมพัฒนาผู้เรียน'))
+    .reduce((sum, r) => sum + (Number(r.calculatedAmount) || 0), 0);
+  const defaultTotal = learnerRevTotal > 0 ? learnerRevTotal : 110000;
   const [totalPool, setTotalPool] = useState<number>(defaultTotal);
 
   const totalPercentage = Math.round(list.reduce((sum, a) => sum + (Number(a.percentage) || 0), 0) * 100) / 100;

@@ -340,6 +340,21 @@ function getSchoolsPath() {
     return $dir . '/schools_data.json';
 }
 
+function saveSchoolsData($data) {
+    file_put_contents(getSchoolsPath(), json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    $pdo = getDbPDO();
+    if ($pdo && is_array($data)) {
+        try {
+            ensureSchoolsTable($pdo);
+            foreach ($data as $sch) {
+                insertSchoolToDatabase($sch);
+            }
+        } catch (Exception $e) {
+            error_log("saveSchoolsData MySQL error: " . $e->getMessage());
+        }
+    }
+}
+
 function ensureSchoolsTable($pdo) {
     if (!$pdo) return;
     try {
@@ -351,12 +366,21 @@ function ensureSchoolsTable($pdo) {
             `school_key` VARCHAR(50) NOT NULL,
             `admin_username` VARCHAR(50) NOT NULL DEFAULT 'admin',
             `admin_password_plain` VARCHAR(100) DEFAULT '123456',
+            `admin_teacher_id` INT UNSIGNED DEFAULT NULL,
+            `admin_teacher_name` VARCHAR(150) DEFAULT NULL,
             `name` VARCHAR(255) NOT NULL,
+            `address` VARCHAR(255) DEFAULT NULL,
+            `subdistrict` VARCHAR(100) DEFAULT NULL,
+            `district` VARCHAR(100) DEFAULT NULL,
             `province` VARCHAR(100) DEFAULT NULL,
+            `zipcode` VARCHAR(20) DEFAULT NULL,
+            `affiliation` VARCHAR(255) DEFAULT 'สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.)',
             `education_area` VARCHAR(255) DEFAULT NULL,
+            `fiscal_year` INT UNSIGNED DEFAULT 2568,
             `director_name` VARCHAR(150) DEFAULT NULL,
             `phone` VARCHAR(50) DEFAULT NULL,
             `email` VARCHAR(100) DEFAULT NULL,
+            `logo_url` LONGTEXT DEFAULT NULL,
             `student_count` INT UNSIGNED DEFAULT 0,
             `project_count` INT UNSIGNED DEFAULT 0,
             `total_budget` DECIMAL(15,2) DEFAULT 0,
@@ -367,11 +391,38 @@ function ensureSchoolsTable($pdo) {
             UNIQUE KEY `uniq_smis` (`smis_code`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
 
-        // ตรวจสอบและเพิ่มคอลัมน์ student_count, project_count, total_budget อัตโนมัติหากตาราง schools ถูกสร้างไว้ก่อนหน้า
+        // ตรวจสอบและเพิ่มคอลัมน์อัตโนมัติหากตาราง schools ถูกสร้างไว้ก่อนหน้า
         $columns = $pdo->query("SHOW COLUMNS FROM `schools`")->fetchAll(PDO::FETCH_COLUMN);
         if ($columns && is_array($columns)) {
+            if (!in_array('logo_url', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `logo_url` LONGTEXT DEFAULT NULL AFTER `email`");
+            }
+            if (!in_array('address', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `address` VARCHAR(255) DEFAULT NULL AFTER `name`");
+            }
+            if (!in_array('subdistrict', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `subdistrict` VARCHAR(100) DEFAULT NULL AFTER `address`");
+            }
+            if (!in_array('district', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `district` VARCHAR(100) DEFAULT NULL AFTER `subdistrict`");
+            }
+            if (!in_array('zipcode', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `zipcode` VARCHAR(20) DEFAULT NULL AFTER `province`");
+            }
+            if (!in_array('affiliation', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `affiliation` VARCHAR(255) DEFAULT 'สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.)' AFTER `zipcode`");
+            }
+            if (!in_array('fiscal_year', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `fiscal_year` INT UNSIGNED DEFAULT 2568 AFTER `education_area`");
+            }
+            if (!in_array('admin_teacher_id', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `admin_teacher_id` INT UNSIGNED DEFAULT NULL AFTER `admin_password_plain`");
+            }
+            if (!in_array('admin_teacher_name', $columns)) {
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `admin_teacher_name` VARCHAR(150) DEFAULT NULL AFTER `admin_teacher_id`");
+            }
             if (!in_array('student_count', $columns)) {
-                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `student_count` INT UNSIGNED DEFAULT 0 AFTER `email`");
+                $pdo->exec("ALTER TABLE `schools` ADD COLUMN `student_count` INT UNSIGNED DEFAULT 0 AFTER `logo_url`");
             }
             if (!in_array('project_count', $columns)) {
                 $pdo->exec("ALTER TABLE `schools` ADD COLUMN `project_count` INT UNSIGNED DEFAULT 0 AFTER `student_count`");
@@ -509,7 +560,7 @@ function loadSchoolsData() {
     }
     ensureSchoolsTable($pdo);
     ensureUsersTableAndAdmins($pdo);
-    $stmt = $pdo->query("SELECT id, school_code as schoolCode, smis_code as smisCode, is_active as isActive, school_key as schoolKey, admin_username as adminUsername, admin_password_plain as adminPasswordPlain, name, province, education_area as educationArea, director_name as directorName, phone, email, student_count as studentCount, project_count as projectCount, total_budget as totalBudget, notes FROM `schools` ORDER BY id ASC");
+    $stmt = $pdo->query("SELECT id, school_code as schoolCode, smis_code as smisCode, is_active as isActive, school_key as schoolKey, admin_username as adminUsername, admin_password_plain as adminPasswordPlain, admin_teacher_id as adminTeacherId, admin_teacher_name as adminTeacherName, name, address, subdistrict, district, province, zipcode, affiliation, education_area as educationArea, fiscal_year as fiscalYear, director_name as directorName, phone, email, logo_url as logoUrl, student_count as studentCount, project_count as projectCount, total_budget as totalBudget, notes FROM `schools` ORDER BY id ASC");
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
     if (!is_array($rows)) return [];
     return array_map(function($r) {
@@ -518,6 +569,7 @@ function loadSchoolsData() {
         $r['studentCount'] = intval($r['studentCount'] ?? 0);
         $r['projectCount'] = intval($r['projectCount'] ?? 0);
         $r['totalBudget'] = floatval($r['totalBudget'] ?? 0);
+        $r['fiscalYear'] = intval($r['fiscalYear'] ?? 2568);
         return $r;
     }, $rows);
 }
@@ -530,43 +582,111 @@ function insertSchoolToDatabase($newSchool) {
     }
     ensureSchoolsTable($pdo);
     ensureUsersTableAndAdmins($pdo);
-    $stmt = $pdo->prepare("INSERT INTO `schools` 
-        (`school_code`, `smis_code`, `is_active`, `school_key`, `admin_username`, `admin_password_plain`, `name`, `province`, `education_area`, `director_name`, `phone`, `email`, `student_count`, `project_count`, `total_budget`, `notes`)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE 
-          name = VALUES(name),
-          province = VALUES(province),
-          education_area = VALUES(education_area),
-          director_name = VALUES(director_name),
-          phone = VALUES(phone),
-          email = VALUES(email),
-          is_active = VALUES(is_active)");
-    $stmt->execute([
-        $newSchool['schoolCode'] ?? ($newSchool['smisCode'] . '00'),
-        $newSchool['smisCode'],
-        !empty($newSchool['isActive']) ? 1 : 0,
-        $newSchool['schoolKey'] ?? ('SCH-' . $newSchool['smisCode']),
-        $newSchool['adminUsername'] ?? ('admin_' . $newSchool['smisCode']),
-        $newSchool['adminPasswordPlain'] ?? '123456',
-        $newSchool['name'],
-        $newSchool['province'] ?? '',
-        $newSchool['educationArea'] ?? '',
-        $newSchool['directorName'] ?? '',
-        $newSchool['phone'] ?? '',
-        $newSchool['email'] ?? '',
-        intval($newSchool['studentCount'] ?? 0),
-        intval($newSchool['projectCount'] ?? 0),
-        floatval($newSchool['totalBudget'] ?? 0),
-        $newSchool['notes'] ?? 'บันทึกลงใน MySQL ตาราง schools สำเร็จ',
-    ]);
-    $insertedId = $pdo->lastInsertId();
-    if ($insertedId) {
-        $newSchool['id'] = intval($insertedId);
+
+    $cleanSmis = trim($newSchool['smisCode'] ?? ($newSchool['smis_code'] ?? ''));
+    if (empty($cleanSmis) && !empty($newSchool['schoolCode'])) {
+        $cleanSmis = substr(trim($newSchool['schoolCode']), 0, 8);
+    }
+    if (empty($cleanSmis)) $cleanSmis = '10000001';
+
+    $schId = !empty($newSchool['id']) ? intval($newSchool['id']) : null;
+    $schoolCode = trim($newSchool['schoolCode'] ?? ($newSchool['school_code'] ?? ($cleanSmis . '00')));
+    $schoolKey = trim($newSchool['schoolKey'] ?? ($newSchool['school_key'] ?? ('SCH-' . $cleanSmis)));
+    $adminUser = trim($newSchool['adminUsername'] ?? ($newSchool['admin_username'] ?? ('admin_' . $cleanSmis)));
+    $adminPass = trim($newSchool['adminPasswordPlain'] ?? ($newSchool['admin_password_plain'] ?? '123456'));
+    $name = trim($newSchool['name'] ?? 'โรงเรียนของคุณ');
+    $address = trim($newSchool['address'] ?? '');
+    $subdistrict = trim($newSchool['subdistrict'] ?? '');
+    $district = trim($newSchool['district'] ?? '');
+    $province = trim($newSchool['province'] ?? '');
+    $zipcode = trim($newSchool['zipcode'] ?? '');
+    $affiliation = trim($newSchool['affiliation'] ?? 'สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน (สพฐ.)');
+    $educationArea = trim($newSchool['educationArea'] ?? ($newSchool['education_area'] ?? ''));
+    $fiscalYear = intval($newSchool['fiscalYear'] ?? ($newSchool['fiscal_year'] ?? 2568));
+    $directorName = trim($newSchool['directorName'] ?? ($newSchool['director_name'] ?? ''));
+    $phone = trim($newSchool['phone'] ?? '');
+    $email = trim($newSchool['email'] ?? '');
+    $logoUrl = trim($newSchool['logoUrl'] ?? ($newSchool['logo_url'] ?? ''));
+    $notes = trim($newSchool['notes'] ?? '');
+    $studentCount = intval($newSchool['studentCount'] ?? ($newSchool['student_count'] ?? 0));
+    $projectCount = intval($newSchool['projectCount'] ?? ($newSchool['project_count'] ?? 0));
+    $totalBudget = floatval($newSchool['totalBudget'] ?? ($newSchool['total_budget'] ?? 0));
+    $adminTeacherId = !empty($newSchool['adminTeacherId']) ? intval($newSchool['adminTeacherId']) : null;
+    $adminTeacherName = trim($newSchool['adminTeacherName'] ?? '');
+    $isActive = isset($newSchool['isActive']) ? (!empty($newSchool['isActive']) ? 1 : 0) : 1;
+
+    if ($schId && $schId > 0) {
+        $stmt = $pdo->prepare("INSERT INTO `schools` 
+            (`id`, `school_code`, `smis_code`, `is_active`, `school_key`, `admin_username`, `admin_password_plain`, `admin_teacher_id`, `admin_teacher_name`, `name`, `address`, `subdistrict`, `district`, `province`, `zipcode`, `affiliation`, `education_area`, `fiscal_year`, `director_name`, `phone`, `email`, `logo_url`, `student_count`, `project_count`, `total_budget`, `notes`)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE 
+              name = VALUES(name),
+              address = VALUES(address),
+              subdistrict = VALUES(subdistrict),
+              district = VALUES(district),
+              province = VALUES(province),
+              zipcode = VALUES(zipcode),
+              affiliation = VALUES(affiliation),
+              education_area = VALUES(education_area),
+              fiscal_year = VALUES(fiscal_year),
+              director_name = VALUES(director_name),
+              phone = VALUES(phone),
+              email = VALUES(email),
+              logo_url = VALUES(logo_url),
+              student_count = VALUES(student_count),
+              project_count = VALUES(project_count),
+              total_budget = VALUES(total_budget),
+              admin_teacher_id = VALUES(admin_teacher_id),
+              admin_teacher_name = VALUES(admin_teacher_name),
+              is_active = VALUES(is_active),
+              notes = VALUES(notes)");
+        $stmt->execute([
+            $schId, $schoolCode, $cleanSmis, $isActive, $schoolKey, $adminUser, $adminPass,
+            $adminTeacherId, $adminTeacherName, $name, $address, $subdistrict, $district, $province,
+            $zipcode, $affiliation, $educationArea, $fiscalYear, $directorName, $phone, $email,
+            $logoUrl, $studentCount, $projectCount, $totalBudget, $notes
+        ]);
+        $newSchool['id'] = $schId;
     } else {
-        $stmtFind = $pdo->prepare("SELECT id FROM `schools` WHERE `smis_code` = ? LIMIT 1");
-        $stmtFind->execute([$newSchool['smisCode']]);
-        $foundId = $stmtFind->fetchColumn();
-        if ($foundId) $newSchool['id'] = intval($foundId);
+        $stmt = $pdo->prepare("INSERT INTO `schools` 
+            (`school_code`, `smis_code`, `is_active`, `school_key`, `admin_username`, `admin_password_plain`, `admin_teacher_id`, `admin_teacher_name`, `name`, `address`, `subdistrict`, `district`, `province`, `zipcode`, `affiliation`, `education_area`, `fiscal_year`, `director_name`, `phone`, `email`, `logo_url`, `student_count`, `project_count`, `total_budget`, `notes`)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE 
+              name = VALUES(name),
+              address = VALUES(address),
+              subdistrict = VALUES(subdistrict),
+              district = VALUES(district),
+              province = VALUES(province),
+              zipcode = VALUES(zipcode),
+              affiliation = VALUES(affiliation),
+              education_area = VALUES(education_area),
+              fiscal_year = VALUES(fiscal_year),
+              director_name = VALUES(director_name),
+              phone = VALUES(phone),
+              email = VALUES(email),
+              logo_url = VALUES(logo_url),
+              student_count = VALUES(student_count),
+              project_count = VALUES(project_count),
+              total_budget = VALUES(total_budget),
+              admin_teacher_id = VALUES(admin_teacher_id),
+              admin_teacher_name = VALUES(admin_teacher_name),
+              is_active = VALUES(is_active),
+              notes = VALUES(notes)");
+        $stmt->execute([
+            $schoolCode, $cleanSmis, $isActive, $schoolKey, $adminUser, $adminPass,
+            $adminTeacherId, $adminTeacherName, $name, $address, $subdistrict, $district, $province,
+            $zipcode, $affiliation, $educationArea, $fiscalYear, $directorName, $phone, $email,
+            $logoUrl, $studentCount, $projectCount, $totalBudget, $notes
+        ]);
+        $insertedId = $pdo->lastInsertId();
+        if ($insertedId) {
+            $newSchool['id'] = intval($insertedId);
+        } else {
+            $stmtFind = $pdo->prepare("SELECT id FROM `schools` WHERE `smis_code` = ? LIMIT 1");
+            $stmtFind->execute([$cleanSmis]);
+            $foundId = $stmtFind->fetchColumn();
+            if ($foundId) $newSchool['id'] = intval($foundId);
+        }
     }
 
     // บันทึกหรืออัปเดตบัญชี Admin ลงในตาราง users ของ MySQL โดยตรง
@@ -768,6 +888,10 @@ function ensureAllAppTables($pdo) {
             PRIMARY KEY (`id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;");
 
+        try {
+            $pdo->exec("ALTER TABLE `students` MODIFY COLUMN `stage` VARCHAR(50) NOT NULL DEFAULT 'ประถม'");
+        } catch (Exception $e) {}
+
         $pdo->exec("CREATE TABLE IF NOT EXISTS `users` (
             `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
             `school_id` INT UNSIGNED NOT NULL DEFAULT 1,
@@ -838,8 +962,9 @@ function syncAppDataToMySQL($pdo, $data, $schoolIdParam = 0) {
             $pdo->prepare("DELETE FROM `students` WHERE `school_id` = ?")->execute([$schoolId]);
         } else {
             $stmt = $pdo->prepare("INSERT INTO `students` (`id`, `school_id`, `fiscal_year_id`, `grade_level`, `stage`, `male_count`, `female_count`, `total_count`)
-                VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
+                  fiscal_year_id = VALUES(fiscal_year_id),
                   grade_level = VALUES(grade_level),
                   stage = VALUES(stage),
                   male_count = VALUES(male_count),
@@ -850,6 +975,7 @@ function syncAppDataToMySQL($pdo, $data, $schoolIdParam = 0) {
                 $stmt->execute([
                     intval($s['id'] ?? 0),
                     $schoolId,
+                    intval($s['fiscalYearId'] ?? 1),
                     $s['gradeLevel'],
                     $s['stage'] ?? 'ประถม',
                     intval($s['maleCount'] ?? 0),
@@ -866,8 +992,9 @@ function syncAppDataToMySQL($pdo, $data, $schoolIdParam = 0) {
             $pdo->prepare("DELETE FROM `revenues` WHERE `school_id` = ?")->execute([$schoolId]);
         } else {
             $stmt = $pdo->prepare("INSERT INTO `revenues` (`id`, `school_id`, `fiscal_year_id`, `category`, `item_name`, `rate_per_head`, `eligible_count`, `calculated_amount`, `is_custom_rate`, `note`)
-                VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
+                  fiscal_year_id = VALUES(fiscal_year_id),
                   category = VALUES(category),
                   item_name = VALUES(item_name),
                   rate_per_head = VALUES(rate_per_head),
@@ -880,6 +1007,7 @@ function syncAppDataToMySQL($pdo, $data, $schoolIdParam = 0) {
                 $stmt->execute([
                     intval($r['id'] ?? 0),
                     $schoolId,
+                    intval($r['fiscalYearId'] ?? 1),
                     $r['category'] ?? 'subsidy',
                     $r['itemName'],
                     floatval($r['ratePerHead'] ?? 0),
@@ -1089,18 +1217,23 @@ function loadAppDataFromMySQL($pdo, $schoolIdParam = 0) {
 
         // 1. School
         $schoolId = intval($schoolIdParam);
+        $schoolFields = "id, school_code as schoolCode, smis_code as smisCode, is_active as isActive, school_key as schoolKey, admin_username as adminUsername, admin_password_plain as adminPasswordPlain, admin_teacher_id as adminTeacherId, admin_teacher_name as adminTeacherName, name, address, subdistrict, district, province, zipcode, affiliation, education_area as educationArea, fiscal_year as fiscalYear, director_name as directorName, phone, email, logo_url as logoUrl, student_count as studentCount, project_count as projectCount, total_budget as totalBudget, notes";
         if ($schoolId > 0) {
-            $stmt = $pdo->prepare("SELECT id, school_code as schoolCode, smis_code as smisCode, is_active as isActive, school_key as schoolKey, admin_username as adminUsername, name, province, education_area as educationArea, director_name as directorName, phone, email, student_count as studentCount, project_count as projectCount, total_budget as totalBudget, notes FROM `schools` WHERE id = ? LIMIT 1");
+            $stmt = $pdo->prepare("SELECT {$schoolFields} FROM `schools` WHERE id = ? LIMIT 1");
             $stmt->execute([$schoolId]);
             $school = $stmt->fetch(PDO::FETCH_ASSOC);
         } else {
-            $stmt = $pdo->query("SELECT id, school_code as schoolCode, smis_code as smisCode, is_active as isActive, school_key as schoolKey, admin_username as adminUsername, name, province, education_area as educationArea, director_name as directorName, phone, email, student_count as studentCount, project_count as projectCount, total_budget as totalBudget, notes FROM `schools` WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+            $stmt = $pdo->query("SELECT {$schoolFields} FROM `schools` WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
             $school = $stmt->fetch(PDO::FETCH_ASSOC);
         }
 
         if ($school) {
             $school['id'] = intval($school['id']);
             $school['isActive'] = true;
+            $school['fiscalYear'] = intval($school['fiscalYear'] ?? 2568);
+            $school['studentCount'] = intval($school['studentCount'] ?? 0);
+            $school['projectCount'] = intval($school['projectCount'] ?? 0);
+            $school['totalBudget'] = floatval($school['totalBudget'] ?? 0);
             $result['school'] = $school;
             $schoolId = $school['id'];
         } else {
@@ -1914,7 +2047,6 @@ try {
             $status = trim($input['status'] ?? '');
 
             if (!$userId) {
-                http_response_code(400);
                 echo json_encode(['success' => false, 'message' => 'กรุณาระบุ userId']);
                 exit;
             }
@@ -1923,19 +2055,31 @@ try {
             $schools = loadSchoolsData();
             $targetUser = null;
             foreach ($users as $u) {
-                if ($u['id'] === $userId) {
+                if (intval($u['id'] ?? 0) === $userId) {
                     $targetUser = $u;
                     break;
                 }
             }
 
-            if (!$targetUser) {
-                http_response_code(404);
-                echo json_encode(['success' => false, 'message' => 'ไม่พบผู้ใช้งานที่ระบุ']);
-                exit;
+            $pdo = getDbPDO();
+            if (!$targetUser && $pdo) {
+                try {
+                    $stmt = $pdo->prepare("SELECT id, school_id as schoolId, username, citizen_id as citizenId, full_name as fullName, email, role, department, position, phone, avatar, is_active as isActive, is_password_changed as isPasswordChanged, status FROM `users` WHERE `id` = ?");
+                    $stmt->execute([$userId]);
+                    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($row) {
+                        $row['id'] = intval($row['id']);
+                        $row['schoolId'] = intval($row['schoolId']);
+                        $row['isActive'] = ($row['isActive'] == 1 || $row['isActive'] === true || $row['isActive'] === '1');
+                        $targetUser = $row;
+                    }
+                } catch (Exception $e) {}
             }
 
-            $pdo = getDbPDO();
+            if (!$targetUser) {
+                echo json_encode(['success' => false, 'message' => 'ไม่พบข้อมูลผู้ใช้งานที่ระบุ']);
+                exit;
+            }
 
             if ($status === 'rejected' || $status === 'delete') {
                 if ($pdo) {
@@ -1945,7 +2089,7 @@ try {
                     } catch (Exception $e) {}
                 }
                 $users = array_values(array_filter($users, function($u) use ($userId) {
-                    return $u['id'] !== $userId;
+                    return intval($u['id'] ?? 0) !== $userId;
                 }));
                 saveUsersData($users);
                 echo json_encode([
@@ -1964,7 +2108,7 @@ try {
 
             if ($targetUser['role'] === 'admin') {
                 foreach ($schools as &$s) {
-                    if ($s['id'] === $targetUser['schoolId']) {
+                    if (intval($s['id'] ?? 0) === intval($targetUser['schoolId'] ?? 0)) {
                         $s['adminTeacherId'] = $targetUser['id'];
                         $s['adminTeacherName'] = $targetUser['fullName'];
                         $s['adminUsername'] = $targetUser['username'];
@@ -1973,14 +2117,14 @@ try {
                 saveSchoolsData($schools);
                 if ($pdo) {
                     try {
-                        $updSch = $pdo->prepare("UPDATE `schools` SET `admin_username` = ? WHERE `id` = ?");
-                        $updSch->execute([$targetUser['username'], $targetUser['schoolId']]);
+                        $updSch = $pdo->prepare("UPDATE `schools` SET `admin_username` = ?, `admin_teacher_id` = ?, `admin_teacher_name` = ? WHERE `id` = ?");
+                        $updSch->execute([$targetUser['username'], $targetUser['id'], $targetUser['fullName'], $targetUser['schoolId']]);
                     } catch (Exception $e) {}
                 }
             }
 
             foreach ($users as &$u) {
-                if ($u['id'] === $userId) {
+                if (intval($u['id'] ?? 0) === $userId) {
                     $u = $targetUser;
                     break;
                 }
@@ -1994,9 +2138,13 @@ try {
                 } catch (Exception $e) {}
             }
 
+            $successMsg = ($targetUser['role'] === 'admin') 
+                ? "แต่งตั้งคุณครู \"{$targetUser['fullName']}\" เป็นผู้ดูแลระบบ (Admin) โรงเรียนเรียบร้อยแล้ว"
+                : "อนุมัติการใช้งานของคุณครู \"{$targetUser['fullName']}\" เรียบร้อยแล้ว";
+
             echo json_encode([
                 'success' => true,
-                'message' => "อนุมัติและปรับสถานะผู้ใช้ \"{$targetUser['fullName']}\" เรียบร้อยแล้ว",
+                'message' => $successMsg,
                 'user' => $targetUser,
             ]);
             exit;
