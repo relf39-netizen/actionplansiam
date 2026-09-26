@@ -104,43 +104,23 @@ export default function App() {
           }
         } catch (e) {}
 
-        // 3. Load stored application data from MySQL
-        const appRes = await fetch('/api/database');
-        if (appRes.ok) {
-          const text = await appRes.text();
-          try {
-            const appJson = JSON.parse(text);
-            if (appJson.success && appJson.data) {
-              const d = appJson.data;
-              if (d.school) setSchool(d.school);
-              if (Array.isArray(d.fiscalYears)) {
-                setFiscalYears(d.fiscalYears);
-                const active = d.fiscalYears.find((fy: FiscalYear) => fy.isActive) || d.fiscalYears[0];
-                if (active) setActiveFiscalYear(active);
-              }
-              if (d.activeFiscalYear) setActiveFiscalYear(d.activeFiscalYear);
-              if (Array.isArray(d.users)) setUsers(d.users);
-              if (Array.isArray(d.students)) setStudents(d.students);
-              if (Array.isArray(d.revenues)) setRevenues(d.revenues);
-              if (Array.isArray(d.allocations)) setAllocations(d.allocations);
-              if (Array.isArray(d.activities)) setActivities(d.activities);
-              if (Array.isArray(d.projects)) setProjects(d.projects);
-              if (Array.isArray(d.transactions)) setTransactions(d.transactions);
-              if (Array.isArray(d.strategies)) setStrategies(d.strategies);
-            }
-          } catch (e) {}
-        }
-
-        // 4. Restore user session if stored
+        // 3. Check saved user session first to determine schoolId
+        let targetSchoolId = 1;
         try {
           const savedUser = localStorage.getItem('school_current_user');
           if (savedUser) {
             const parsedUser = JSON.parse(savedUser);
             if (parsedUser && parsedUser.id) {
               setCurrentUser(parsedUser);
+              if (parsedUser.schoolId && Number(parsedUser.schoolId) > 0) {
+                targetSchoolId = Number(parsedUser.schoolId);
+              }
             }
           }
         } catch (e) {}
+
+        // 4. Load application data from MySQL for target school and its active fiscal year
+        await loadDataForSchoolAndYear(targetSchoolId);
       } catch (err) {
         console.error('Error fetching initial database state:', err);
       } finally {
@@ -150,6 +130,46 @@ export default function App() {
 
     fetchInitialData();
   }, []);
+
+  // Helper to load application data for a specific school and fiscal year from MySQL
+  const loadDataForSchoolAndYear = async (targetSchoolId: number, targetFyId?: number) => {
+    try {
+      const url = targetFyId
+        ? `/api/database?school_id=${targetSchoolId}&fiscal_year_id=${targetFyId}`
+        : `/api/database?school_id=${targetSchoolId}`;
+      const appRes = await fetch(url);
+      if (appRes.ok) {
+        const text = await appRes.text();
+        try {
+          const appJson = JSON.parse(text);
+          if (appJson.success && appJson.data) {
+            const d = appJson.data;
+            if (d.school) setSchool(d.school);
+            if (Array.isArray(d.fiscalYears)) {
+              setFiscalYears(d.fiscalYears);
+            }
+            if (d.activeFiscalYear) {
+              setActiveFiscalYear(d.activeFiscalYear);
+            } else if (Array.isArray(d.fiscalYears)) {
+              const active = d.fiscalYears.find((fy: FiscalYear) => fy.isActive) || d.fiscalYears[0];
+              if (active) setActiveFiscalYear(active);
+            }
+            if (Array.isArray(d.users)) setUsers(d.users);
+            // Load students and revenues strictly from MySQL for this school and fiscal year
+            setStudents(Array.isArray(d.students) ? d.students : []);
+            setRevenues(Array.isArray(d.revenues) ? d.revenues : []);
+            if (Array.isArray(d.allocations)) setAllocations(d.allocations);
+            if (Array.isArray(d.activities)) setActivities(d.activities);
+            if (Array.isArray(d.projects)) setProjects(d.projects);
+            if (Array.isArray(d.transactions)) setTransactions(d.transactions);
+            if (Array.isArray(d.strategies)) setStrategies(d.strategies);
+          }
+        } catch (e) {}
+      }
+    } catch (err) {
+      console.error('Error loading data for school and year:', err);
+    }
+  };
 
   // Helper to persist data to server / MySQL
   const persistToServer = async (overrides: Record<string, any> = {}) => {
@@ -170,7 +190,8 @@ export default function App() {
       };
 
       const targetSchoolId = payload.school?.id || 1;
-      const res = await fetch(`/api/database?school_id=${targetSchoolId}`, {
+      const targetFiscalYearId = payload.activeFiscalYear?.id || 1;
+      const res = await fetch(`/api/database?school_id=${targetSchoolId}&fiscal_year_id=${targetFiscalYearId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

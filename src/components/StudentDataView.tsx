@@ -10,7 +10,7 @@ interface StudentDataViewProps {
   onUpdateFiscalYear?: (updatedFy: FiscalYear) => void;
 }
 
-const STANDARD_GRADE_LEVELS: Array<{ gradeLevel: string; stage: 'อนุบาล' | 'ประถม' | 'มัธยมต้น' | 'มัธยมปลาย'; rate: number }> = [
+const STANDARD_PRIMARY_GRADES: Array<{ gradeLevel: string; stage: 'อนุบาล' | 'ประถม'; rate: number }> = [
   { gradeLevel: 'อนุบาล 1', stage: 'อนุบาล', rate: 1800 },
   { gradeLevel: 'อนุบาล 2', stage: 'อนุบาล', rate: 1800 },
   { gradeLevel: 'อนุบาล 3', stage: 'อนุบาล', rate: 1800 },
@@ -20,6 +20,9 @@ const STANDARD_GRADE_LEVELS: Array<{ gradeLevel: string; stage: 'อนุบา
   { gradeLevel: 'ประถมศึกษาปีที่ 4', stage: 'ประถม', rate: 2050 },
   { gradeLevel: 'ประถมศึกษาปีที่ 5', stage: 'ประถม', rate: 2050 },
   { gradeLevel: 'ประถมศึกษาปีที่ 6', stage: 'ประถม', rate: 2050 },
+];
+
+const STANDARD_SECONDARY_GRADES: Array<{ gradeLevel: string; stage: 'มัธยมต้น' | 'มัธยมปลาย'; rate: number }> = [
   { gradeLevel: 'มัธยมศึกษาปีที่ 1', stage: 'มัธยมต้น', rate: 3700 },
   { gradeLevel: 'มัธยมศึกษาปีที่ 2', stage: 'มัธยมต้น', rate: 3700 },
   { gradeLevel: 'มัธยมศึกษาปีที่ 3', stage: 'มัธยมต้น', rate: 3700 },
@@ -37,39 +40,38 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
 }) => {
   const currentSchoolId = school?.id || 1;
 
-  // Build merged list: keep all existing students, and ensure secondary grades (ม.1–ม.6) are present
+  // โหลดเฉพาะข้อมูลจริงของโรงเรียนและปีงบประมาณที่เลือก ห้ามเติมชั้นตัวอย่างเองเมื่อมีข้อมูลแล้วหรือถูกลบไปแล้ว
   const initializeGradeList = (incoming: StudentLevel[]): StudentLevel[] => {
     const schoolStudents = incoming.filter(
-      (s) => !s.fiscalYearId || s.fiscalYearId === activeFiscalYear.id || incoming.length <= 15
+      (s) => Number(s.fiscalYearId) === Number(activeFiscalYear.id) &&
+             (!s.schoolId || Number(s.schoolId) === Number(currentSchoolId))
     );
 
-    const existingList = [...(schoolStudents.length > 0 ? schoolStudents : incoming)];
-    let maxId = existingList.length > 0 ? Math.max(...existingList.map((s) => Number(s.id) || 0)) : 0;
-
-    // Check which standard levels are missing
-    const merged = [...existingList];
-    for (const std of STANDARD_GRADE_LEVELS) {
-      const found = merged.find(
-        (e) =>
-          e.gradeLevel.trim() === std.gradeLevel.trim() ||
-          (std.gradeLevel.startsWith('มัธยมศึกษาปีที่') &&
-            e.gradeLevel.replace(/\s+/g, '').includes(std.gradeLevel.replace('มัธยมศึกษาปีที่', 'ม.').trim()))
-      );
-      if (!found) {
-        maxId += 1;
-        merged.push({
-          id: maxId,
-          schoolId: currentSchoolId,
-          fiscalYearId: activeFiscalYear.id,
-          gradeLevel: std.gradeLevel,
-          stage: std.stage,
-          maleCount: 0,
-          femaleCount: 0,
-          totalCount: 0,
-        });
-      }
+    // หากโรงเรียนมีข้อมูลที่บันทึกไว้แล้วใน MySQL หรือตั้งใจลบจนเหลือเฉพาะประถม ให้คงตามนั้น 100% ห้ามเติมมัธยมกลับมา
+    if (schoolStudents.length > 0) {
+      return schoolStudents;
     }
-    return merged;
+
+    // กรณีข้อมูลส่งมาจาก parent แต่ยังไม่ได้ระบุ fiscalYearId
+    if (incoming.length > 0 && incoming.some((s) => !s.fiscalYearId)) {
+      return incoming.map((s) => ({
+        ...s,
+        schoolId: currentSchoolId,
+        fiscalYearId: activeFiscalYear.id,
+      }));
+    }
+
+    // หากไม่มีข้อมูลเลย (โรงเรียนเปิดใหม่/ปีงบประมาณใหม่) ให้เริ่มต้นด้วยชั้นประถมมาตรฐาน อ.1 - ป.6
+    return STANDARD_PRIMARY_GRADES.map((std, idx) => ({
+      id: idx + 1,
+      schoolId: currentSchoolId,
+      fiscalYearId: activeFiscalYear.id,
+      gradeLevel: std.gradeLevel,
+      stage: std.stage,
+      maleCount: 0,
+      femaleCount: 0,
+      totalCount: 0,
+    }));
   };
 
   const [list, setList] = useState<StudentLevel[]>(() => initializeGradeList(students));
@@ -94,6 +96,51 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
     );
   };
 
+  // นำเข้าระดับชั้น ประถมศึกษามาตรฐาน สพฐ. (อ.1 - ป.6)
+  const handleImportPrimaryTemplate = () => {
+    if (list.length > 0 && !window.confirm('คุณต้องการรีเซ็ตระดับชั้นเป็นเฉพาะประถมศึกษา (อ.1 - ป.6) หรือไม่?')) {
+      return;
+    }
+    const newList: StudentLevel[] = STANDARD_PRIMARY_GRADES.map((std, idx) => ({
+      id: idx + 1,
+      schoolId: currentSchoolId,
+      fiscalYearId: activeFiscalYear.id,
+      gradeLevel: std.gradeLevel,
+      stage: std.stage,
+      maleCount: 0,
+      femaleCount: 0,
+      totalCount: 0,
+    }));
+    setList(newList);
+  };
+
+  // เพิ่มระดับชั้นมัธยมศึกษา (ม.1 - ม.6) สำหรับโรงเรียนขยายโอกาส/มัธยม
+  const handleAddSecondaryGrades = () => {
+    let maxId = list.length > 0 ? Math.max(...list.map((s) => Number(s.id) || 0)) : 0;
+    const toAdd: StudentLevel[] = [];
+    for (const sec of STANDARD_SECONDARY_GRADES) {
+      const alreadyHas = list.some((item) => item.gradeLevel.trim() === sec.gradeLevel.trim());
+      if (!alreadyHas) {
+        maxId += 1;
+        toAdd.push({
+          id: maxId,
+          schoolId: currentSchoolId,
+          fiscalYearId: activeFiscalYear.id,
+          gradeLevel: sec.gradeLevel,
+          stage: sec.stage,
+          maleCount: 0,
+          femaleCount: 0,
+          totalCount: 0,
+        });
+      }
+    }
+    if (toAdd.length === 0) {
+      alert('มีระดับชั้นมัธยมศึกษา (ม.1 - ม.6) อยู่ในตารางแล้ว');
+      return;
+    }
+    setList((prev) => [...prev, ...toAdd]);
+  };
+
   // Add a custom new grade level row
   const handleAddGrade = () => {
     const newId = list.length > 0 ? Math.max(...list.map((s) => Number(s.id) || 0)) + 1 : 1;
@@ -111,7 +158,7 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
   };
 
   const handleRemoveGrade = (id: number) => {
-    if (window.confirm('ต้องการลบแถวระดับชั้นนี้ใช่หรือไม่?')) {
+    if (window.confirm('ต้องการลบระดับชั้นนี้ใช่หรือไม่? (เมื่อกดบันทึก ข้อมูลจะถูกลบออกจาก MySQL อย่างถาวร)')) {
       setList((prev) => prev.filter((s) => s.id !== id));
     }
   };
@@ -344,23 +391,41 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({
               กรอกจำนวนนักเรียนชายและหญิง ระบบจะคำนวณยอดรวมรายชั้นและประมาณการเงินอุดหนุนรายหัวให้อัตโนมัติ
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleImportPrimaryTemplate}
+              className="text-xs text-blue-700 hover:text-blue-900 bg-blue-50 border border-blue-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1 font-semibold cursor-pointer"
+              title="โหลดเฉพาะระดับชั้นประถมศึกษา อ.1 - ป.6"
+            >
+              <SchoolIcon className="h-3.5 w-3.5" />
+              <span>เฉพาะประถม (อ.1 - ป.6)</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleAddSecondaryGrades}
+              className="text-xs text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1 font-semibold cursor-pointer"
+              title="เพิ่มระดับชั้นมัธยมศึกษา ม.1 - ม.6 สำหรับโรงเรียนขยายโอกาส/มัธยม"
+            >
+              <GraduationCap className="h-3.5 w-3.5" />
+              <span>+ เพิ่มมัธยม (ม.1 - ม.6)</span>
+            </button>
             <button
               type="button"
               onClick={handleAddGrade}
-              className="text-xs text-blue-700 hover:text-blue-900 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-lg flex items-center gap-1 font-semibold cursor-pointer"
+              className="text-xs text-slate-700 hover:text-slate-900 bg-slate-50 border border-slate-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1 font-semibold cursor-pointer"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>เพิ่มระดับชั้นพิเศษ</span>
+              <span>+ เพิ่มชั้นพิเศษ</span>
             </button>
             <button
               type="button"
               onClick={() => setList(initializeGradeList(students))}
-              className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1 border border-slate-200 px-3 py-1.5 rounded-lg bg-white cursor-pointer"
-              title="คืนค่าเดิม"
+              className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1 border border-slate-200 px-2.5 py-1.5 rounded-lg bg-white cursor-pointer"
+              title="คืนค่าเดิมจากฐานข้อมูล"
             >
               <RefreshCcw className="h-3.5 w-3.5" />
-              <span>รีเซ็ตค่า</span>
+              <span>รีเฟรช</span>
             </button>
           </div>
         </div>

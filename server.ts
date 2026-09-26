@@ -15,6 +15,8 @@ import {
   saveAppData,
   loadAppData,
   getDirectConnection,
+  addFiscalYearToDb,
+  setActiveFiscalYearInDb,
 } from './src/server/database';
 
 dotenv.config();
@@ -1117,7 +1119,8 @@ const defaultSchools: any[] = [];
 app.get(['/api/database', '/api/app-data'], async (req, res) => {
   try {
     const schoolId = req.query.school_id ? Number(req.query.school_id) : undefined;
-    const data = await loadAppData(schoolId);
+    const fiscalYearId = req.query.fiscal_year_id ? Number(req.query.fiscal_year_id) : undefined;
+    const data = await loadAppData(schoolId, fiscalYearId);
     return res.json({ success: true, data });
   } catch (e: any) {
     console.error('Error reading app database:', e);
@@ -1136,6 +1139,61 @@ app.post(['/api/database', '/api/app-data'], async (req, res) => {
   } catch (e: any) {
     console.error('Error saving app database:', e);
     return res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// Fiscal Years Dedicated API
+app.get('/api/fiscal-years', async (req, res) => {
+  try {
+    const schoolId = Number(req.query.school_id) || 1;
+    const conn = await getDirectConnection();
+    const [rows]: any = await conn.query('SELECT * FROM fiscal_years WHERE school_id = ? ORDER BY year DESC', [schoolId]);
+    await conn.end();
+    const mapped = (rows || []).map((fy: any) => ({
+      id: fy.id,
+      schoolId: fy.school_id,
+      year: fy.year,
+      isActive: fy.is_active === 1,
+      startDate: fy.start_date,
+      endDate: fy.end_date,
+      totalStudents: Number(fy.total_students) || 0,
+      teacherCount: Number(fy.teacher_count) || 0,
+    }));
+    return res.json({ success: true, fiscalYears: mapped });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/fiscal-years', async (req, res) => {
+  try {
+    const { schoolId, year, isActive } = req.body || {};
+    const sId = Number(schoolId) || 1;
+    const yNum = Number(year);
+    if (!yNum || yNum < 2500 || yNum > 2600) {
+      return res.status(400).json({ success: false, message: 'กรุณาระบุปีงบประมาณ พ.ศ. ที่ถูกต้อง (2500 - 2600)' });
+    }
+    const result = await addFiscalYearToDb(sId, yNum, isActive !== false);
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error adding fiscal year:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/fiscal-years/activate', async (req, res) => {
+  try {
+    const { schoolId, fiscalYearId } = req.body || {};
+    const sId = Number(schoolId) || 1;
+    const fyId = Number(fiscalYearId);
+    if (!fyId) {
+      return res.status(400).json({ success: false, message: 'กรุณาระบุ fiscalYearId' });
+    }
+    const result = await setActiveFiscalYearInDb(sId, fyId);
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error activating fiscal year:', err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 });
 

@@ -107,12 +107,12 @@ export const RevenueView: React.FC<RevenueViewProps> = ({
   students = [],
   onUpdateRevenues,
 }) => {
-  // Count actual students per stage
+  // Count actual students per stage from latest students table of same school and fiscal year
   const kinderCount = students.filter((s) => s.stage === 'อนุบาล').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
   const primaryCount = students.filter((s) => s.stage === 'ประถม').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
   const secLowerCount = students.filter((s) => s.stage === 'มัธยมต้น').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
   const secUpperCount = students.filter((s) => s.stage === 'มัธยมปลาย').reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
-  const actualTotal = kinderCount + primaryCount + secLowerCount + secUpperCount || totalStudents;
+  const actualTotal = students.length > 0 ? (kinderCount + primaryCount + secLowerCount + secUpperCount) : totalStudents;
 
   const getStageCount = (stage: 'อนุบาล' | 'ประถม' | 'มัธยมต้น' | 'มัธยมปลาย' | 'all') => {
     switch (stage) {
@@ -249,12 +249,19 @@ export const RevenueView: React.FC<RevenueViewProps> = ({
       else if (item.itemName.includes('มัธยมต้น') || item.itemName.includes('มัธยมศึกษาตอนต้น')) stageMatch = 'มัธยมต้น';
       else if (item.itemName.includes('มัธยมปลาย') || item.itemName.includes('มัธยมศึกษาตอนปลาย')) stageMatch = 'มัธยมปลาย';
 
-      if (stageMatch && !item.isCustomRate) {
+      if (stageMatch) {
         const count = getStageCount(stageMatch);
         return {
           ...item,
           eligibleCount: count,
-          calculatedAmount: Math.round(item.ratePerHead * count),
+          calculatedAmount: Math.round((Number(item.ratePerHead) || 0) * count),
+        };
+      } else if (item.itemName.includes('นักเรียน') || item.category === 'welfare') {
+        const count = actualTotal;
+        return {
+          ...item,
+          eligibleCount: count,
+          calculatedAmount: Math.round((Number(item.ratePerHead) || 0) * count),
         };
       }
       return item;
@@ -472,7 +479,13 @@ export const RevenueView: React.FC<RevenueViewProps> = ({
     .reduce((sum, r) => sum + (Number(r.calculatedAmount) || 0), 0);
 
   const handleSave = () => {
-    onUpdateRevenues(items);
+    const payload = items.map((r) => ({
+      ...r,
+      schoolId: r.schoolId || activeFiscalYear.schoolId || 1,
+      fiscalYearId: activeFiscalYear.id,
+      calculatedAmount: Math.round((Number(r.ratePerHead) || 0) * (Number(r.eligibleCount) || 0)),
+    }));
+    onUpdateRevenues(payload);
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
   };
